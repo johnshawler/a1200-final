@@ -1,0 +1,25 @@
+# Builds the port described in port.conf, runs its bench on an emulated stock Amiga 1200,
+# and fails unless the brief's gates pass. The same script runs locally: tools/port.sh
+name: bench
+on: [push, pull_request, workflow_dispatch]
+jobs:
+  bench:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install the emulator and the compiler
+        run: tools/setup.sh
+      - name: The kit is unchanged
+        run: tools/check_kit.sh
+      - name: Build, bench and check the gates
+        run: tools/port.sh
+      - name: Keep the evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: bench
+          path: |
+            bench.txt
+            shot.png
+          if-no-files-found: ignore
