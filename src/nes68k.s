@@ -8,8 +8,8 @@
         xdef    _asm_run,_asm_dispatch
         xref    _cpu_a,_cpu_s,_cpu_x,_cpu_y,_cpu_c,_cpu_z,_cpu_n,_cpu_v,_cpu_i,_cpu_d
 ;       _cpu_x,_cpu_y,_cpu_s,_cpu_c,_cpu_z,_cpu_n,_cpu_v,_cpu_i,_cpu_d
-        xref    _nes_ram,_nes_prg_lo,_nes_prg_data,_nes_bank,_mmc_shift,_pad_shift,_pad_strobe,_nes_pad
-        xref    _nes_io_read,_nes_read_s0,_nes_write_slow,_nes_wait,_nes_fatal,_nes_mmc_prg
+        xref    _nes_ram,_nes_prg_lo,_nes_prg_hi,_nes_prg_data,_nes_bank,_mmc_shift,_mmc_chr0,_mmc_chr1,_mmc_ctrl,_mmc_prg,_pad_shift,_pad_strobe,_nes_pad
+        xref    _nes_io_read,_nes_read_s0,_nes_write_slow,_nes_wait,_nes_fatal,_nes_mmc_prg,_nes_mmc_ctrl
 
 ; ---- moving the 6502 state between the globals and the registers
 _load_state:
@@ -90,6 +90,8 @@ _tramp_ret:
 
 ; ---- RTS found other bytes on the 6502 stack than its caller pushed: find the 68k frame that expects them.
 ; In: a0 = the frame that did not match + 2, a2 past the two popped bytes, d6 = the flags.
+_unwind_x:                              ; the same, when no caller uses N and Z (X is still intact)
+        move.w  ccr,d6
 _unwind:
         move.w  -2(a2),d7
         subq.l  #2,a0
@@ -114,37 +116,31 @@ _rti:
 ; ---- jump to the translated function for d7.w in the mapped bank; d6 = the flags to restore
 _dispatch:
         movem.l d0-d2,-(sp)
-        lea     _disp_tabs,a0
-        moveq   #0,d2
-        move.w  d7,d2
-        cmp.l   #$c000,d2
-        bcs.s   .banked
-        movea.l 28(a0),a0
-        bra.s   .search
-.banked cmp.l   #$8000,d2
+        moveq   #0,d0
+        move.w  d7,d0                   ; address
+        moveq   #7,d1                   ; bank: 7 = the fixed one
+        cmp.l   #$c000,d0
+        bcc.s   .h
+        cmp.l   #$8000,d0
         bcs.s   .nf
-        moveq   #0,d4
-        move.b  _nes_bank,d4
-        lsl.w   #2,d4
-        movea.l (a0,d4.w),a0
-.search move.l  (a0)+,d4                ; hi = count
-        moveq   #0,d3                   ; lo
-.loop   cmp.l   d4,d3
-        bge.s   .nf
-        move.l  d3,d0
-        add.l   d4,d0
-        lsr.l   #1,d0                   ; mid
-        move.l  d0,d1
-        lsl.l   #3,d1
-        cmp.l   (a0,d1.l),d2
+        move.b  _nes_bank,d1
+.h      move.w  d1,d4                   ; slot = (address + bank * 311) & 2047, as tools/back68k.py
+        mulu.w  #311,d4
+        add.w   d0,d4
+        and.w   #2047,d4
+        lea     _disp_hash,a0
+.probe  move.w  d4,d3
+        lsl.w   #3,d3
+        move.w  (a0,d3.w),d2
+        beq.s   .nf                     ; empty slot: unknown
+        cmp.w   d2,d0
+        bne.s   .next
+        cmp.w   2(a0,d3.w),d1
         beq.s   .found
-        bhi.s   .up
-        move.l  d0,d4
-        bra.s   .loop
-.up     addq.l  #1,d0
-        move.l  d0,d3
-        bra.s   .loop
-.found  movea.l 4(a0,d1.l),a1
+.next   addq.w  #1,d4
+        and.w   #2047,d4
+        bra.s   .probe
+.found  movea.l 4(a0,d3.w),a1
         movem.l (sp)+,d0-d2
         move.w  d6,ccr
         jmp     (a1)
@@ -220,23 +216,51 @@ _io_wr_d0:                              ; a0 = address, value in d0 / d1 / d2
         movem.l d0-d1/a0-a1,-(sp)
         moveq   #0,d4
         move.b  d0,d4
-        bra.s   _io_wr
+        bra     _io_wr
 _io_wr_d1:
         move.w  ccr,-(sp)
         movem.l d0-d1/a0-a1,-(sp)
         moveq   #0,d4
         move.b  d1,d4
-        bra.s   _io_wr
+        bra     _io_wr
 _io_wr_d2:
         move.w  ccr,-(sp)
         movem.l d0-d1/a0-a1,-(sp)
         moveq   #0,d4
         move.b  d2,d4
-_mmc_prg:                               ; d4 = new MMC1 PRG register: as five serial writes would leave it
+_set_prg:                               ; d4 = new MMC1 PRG register: as five serial writes would leave it
         move.w  ccr,-(sp)
+        move.b  _mmc_ctrl,d3
+        and.b   #$0c,d3
+        cmp.b   #$0c,d3                 ; mode 3 (the game's): 16 KB at $8000 switched, the last bank fixed
+        bne.s   .c
+        move.b  d4,_mmc_prg
+        move.b  d4,d3
+        and.l   #7,d3
+        move.b  d3,_nes_bank
+        moveq   #14,d4
+        lsl.l   d4,d3                   ; bank * $4000
+        lea     _nes_prg_data,a3
+        adda.l  d3,a3
+        move.l  a3,_nes_prg_lo
+        move.l  #_nes_prg_data+$1c000,_nes_prg_hi
+        move.b  #$10,_mmc_shift
+        move.w  (sp)+,ccr
+        rts
+.c
         movem.l d0-d1/a0-a1,-(sp)
         move.l  d4,-(sp)
         jsr     _nes_mmc_prg
+        addq.l  #4,sp
+        move.l  _nes_prg_lo,a3
+        movem.l (sp)+,d0-d1/a0-a1
+        move.w  (sp)+,ccr
+        rts
+_set_ctrl:                              ; d4 = new MMC1 control register
+        move.w  ccr,-(sp)
+        movem.l d0-d1/a0-a1,-(sp)
+        move.l  d4,-(sp)
+        jsr     _nes_mmc_ctrl
         addq.l  #4,sp
         move.l  _nes_prg_lo,a3
         movem.l (sp)+,d0-d1/a0-a1

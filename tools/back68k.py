@@ -75,21 +75,164 @@ HLE = {
     moveq #0,d2
     move.b d4,d0
     ori.b #$10,ccr""",
-    # $C14E: STA $27, then the five serial MMC1 writes of A to the PRG register. Only when the shift register
-    # is idle and A has no reset bit (what the game always does); otherwise the translated code runs (.orig).
-    (7, 0xc14e): """
-    btst #7,d0
-    bne .orig
-    cmp.b #$10,_mmc_shift
-    bne .orig
-    move.b d0,$27-$80(a5)
-    moveq #$1f,d4
-    and.b d0,d4
-    bsr _mmc_prg
-    lsr.b #4,d0
-    tst.b $2d-$80(a5)""",
 }
-HLE_FALLBACK = {(7, 0xc14e)}
+
+# The game's MMC1 routines: "STA store (optional); INC $2D; five times STA reg, LSR; DEC $2D; RTS". Done in one
+# step when the shift register is idle and A has no reset bit (always, in this game); else the translation (.orig).
+# Effects: the register gets A & $1F, A ends shifted right 4 (carry = bit 3), N and Z come from $2D.
+def _mmc_hle(load, store, setreg):
+    pre = ['    move.b $%x-$80(a5),d0' % load] if load else []
+    st = ['    move.b d0,$%x-$80(a5)' % store] if store else []
+    return '\n'.join(pre + ['    btst #7,d0', '    bne .orig', '    cmp.b #$10,_mmc_shift', '    bne .orig'] + st +
+                     ['    moveq #$1f,d4', '    and.b d0,d4'] + setreg + ['    lsr.b #4,d0', '    tst.b $2d-$80(a5)'])
+for _k, _ld, _st, _set in [
+        ((7, 0xc14e), None, 0x27, ['    bsr _set_prg']),                       # PRG bank
+        ((7, 0xc14c), 0x27, 0x27, ['    bsr _set_prg']),                       # the same, bank from $27
+        ((7, 0xc150), None, None, ['    bsr _set_prg']),                       # the same without the store (music code)
+        ((7, 0xc102), None, 0x22, ['    bsr _set_ctrl']),                      # control (mirroring)
+        ((7, 0xc11c), None, None, ['    move.b d4,_mmc_chr0', '    move.b #$10,_mmc_shift']),   # tile set 0
+        ((7, 0xc134), None, None, ['    move.b d4,_mmc_chr1', '    move.b #$10,_mmc_shift'])]:  # tile set 1
+    HLE[_k] = _mmc_hle(_ld, _st, _set)
+# $C378: $05:$04 (signed) times $02 (unsigned), shifted right 8 with rounding, back into $05:$04. The original
+# shifts and adds 16 times with PHP/PLP around it; this computes the product with mulu and replays only the low
+# byte to know which of its subroutine calls ran last (their return addresses stay on the stack page).
+HLE[(7, 0xc378)] = '''
+    move.b $05-$80(a5),d0
+    bsr _php
+    moveq #0,d3
+    move.b $05-$80(a5),d3
+    lsl.w #8,d3
+    move.b $04-$80(a5),d3
+    moveq #0,d1
+    moveq #0,d0
+    tst.w d3
+    bpl.s .pos
+    neg.w d3
+    moveq #1,d1
+    moveq #1,d0
+.pos moveq #0,d6
+    move.b $02-$80(a5),d6
+    moveq #0,d4
+    moveq #15,d7
+.l  add.b d4,d4
+    btst d7,d3
+    beq.s .nb
+    add.b d6,d4
+    bcc.s .nb
+    moveq #2,d1
+.nb dbf d7,.l
+    mulu.w d6,d3
+    tst.b d4
+    bpl.s .nr
+    moveq #3,d1
+    add.l #$100,d3
+.nr lsr.l #8,d3
+    move.b d3,$04-$80(a5)
+    lsr.w #8,d3
+    move.b d3,$05-$80(a5)
+    tst.b d1
+    beq.s .ng
+    move.b #$c3,-1(a2)
+    move.b .ret(pc,d1.w),-2(a2)
+.ng move.b d0,d7
+    move.b d4,d0
+    andi.b #$80,d0
+    moveq #0,d1
+    tst.b d7
+    bne.s .neg
+    bsr _plp
+    bra.s .out
+.ret dc.b 0,$7f,$92,$9c
+.neg bsr _plp
+    moveq #0,d0
+    sub.b $04-$80(a5),d0
+    move.b d0,$04-$80(a5)
+    moveq #0,d0
+    move.b $05-$80(a5),d4
+    ori.b #$04,ccr
+    subx.b d4,d0
+    svs d5
+    eori.b #$10,ccr
+    move.b d0,$05-$80(a5)
+.out'''
+# $E2DE: one entry of a metasprite table at ($12),Y into OAM entry X: hide it, then tile, attribute (EOR $02),
+# x = $05 + offset (negated when $03 says mirrored, sign-extended into $00, carried into $07), y = $04 + offset.
+# A $FF tile or attribute ends the list; off-screen positions hide the entry. Every exit sets A, Y, the flags
+# and $00/$10 exactly as the 6502 code does. The table must be in ROM and Y must not wrap; else .orig.
+HLE[(7, 0xe2de)] = '''
+    cmp.b #$fb,d2
+    bhi .orig
+    moveq #0,d7
+    move.w $12-$80(a5),d7
+    rol.w #8,d7
+    add.l d2,d7
+    cmp.l #$c000,d7
+    bcs.s .lo
+    lea (-$c000,a4,d7.l),a0
+    bra.s .go
+.lo cmp.l #$8000,d7
+    bcs .orig
+    cmp.l #$bffc,d7
+    bhi .orig
+    lea (-$8000,a3,d7.l),a0
+.go move.b #$f0,($180,a5,d1.w)
+    move.b (a0)+,d0
+    addq.b #1,d2
+    cmp.b #$ff,d0
+    bne.s .e2ed
+    move.b d1,$10-$80(a5)
+    cmp.b #$ff,d0
+    ori.b #$10,ccr
+    bra .rts
+.e2ed move.b $02-$80(a5),d4
+    eor.b d4,d0
+    move.b d0,($182,a5,d1.w)
+    move.b (a0)+,d0
+    move.b d0,($181,a5,d1.w)
+    addq.b #1,d2
+    cmp.b #$ff,d0
+    bne.s .c1
+    ori.b #$10,ccr
+    bra.s .e337
+.c1 clr.b $00-$80(a5)
+    move.b (a0),d0
+    tst.b $03-$80(a5)
+    beq.s .nm
+    neg.b d0
+.nm tst.b d0
+    bpl.s .p1
+    subq.b #1,$00-$80(a5)
+.p1 add.b $05-$80(a5),d0
+    move.b d0,($183,a5,d1.w)
+    move.b $07-$80(a5),d4
+    move.b $00-$80(a5),d3
+    ori.b #$04,ccr
+    addx.b d3,d4
+    move.b d4,d0
+    bne.s .e337
+    addq.l #1,a0
+    addq.b #1,d2
+    clr.b $00-$80(a5)
+    move.b (a0),d0
+    bpl.s .p2
+    subq.b #1,$00-$80(a5)
+.p2 add.b $04-$80(a5),d0
+    move.b d0,($180,a5,d1.w)
+    moveq #0,d4
+    move.b $00-$80(a5),d3
+    ori.b #$04,ccr
+    addx.b d3,d4
+    move.b d4,d0
+    bne.s .e338
+    move.b (_inctab,d2.w),d2
+    bra.s .rts
+.e337 move.b (_inctab,d2.w),d2
+.e338 move.b #$f0,d0
+    move.b d0,($180,a5,d1.w)
+    move.b d1,$10-$80(a5)
+    move.b (_inctab,d2.w),d2
+.rts'''
+HLE_FALLBACK = {(7, 0xe2de), (7, 0xc14e), (7, 0xc14c), (7, 0xc150), (7, 0xc102), (7, 0xc11c), (7, 0xc134)}
 
 def generate(g):
     entries, body, insn, ctx_of = g['entries'], g['body'], g['insn'], g['ctx_of']
@@ -314,6 +457,7 @@ def generate(g):
                     labels.add(s)
         labels.add(e)
         stubs = []
+        E('    xdef %s' % fname(ctx, e))         # exported only so a profiler can name them
         E('%s:' % fname(ctx, e))
         if (ctx, e) in HLE:
             E('; hand-written equivalent of the 6502 routine')
@@ -552,9 +696,8 @@ def generate(g):
                 L += push + ['bsr %s' % call_target(ctx, a, arg), 'dc.w $%04x' % sw]
                 nzsrc = None; c68 = None
             elif m == 'RTS':
-                L += ['move.w ccr,d6', 'movea.l (sp)+,a0', 'cmpm.w (a2)+,(a0)+', 'bne _unwind']
-                if exit_live[k] & NZ: L.append('move.w d6,ccr')
-                L.append('jmp (a0)')
+                if exit_live[k] & NZ: L += ['move.w ccr,d6', 'movea.l (sp)+,a0', 'cmpm.w (a2)+,(a0)+', 'bne _unwind', 'move.w d6,ccr', 'jmp (a0)']
+                else: L += ['movea.l (sp)+,a0', 'cmpm.w (a2)+,(a0)+', 'bne _unwind_x', 'jmp (a0)']
             elif m == 'RTI':
                 L += ['move.b (a2)+,d4', 'move.w (a2)+,d7', 'rol.w #8,d7', 'bsr _setp', 'bra _rti']
             elif m == 'BRK':
@@ -592,24 +735,24 @@ def generate(g):
 
     # the run-time helpers, in this same code section
     E('    include "src/nes68k.s"')
-    # dispatch tables, sorted by address
+    # dispatch: an open-addressing hash of (bank, address) -> function. Bank 7 for $C000-$FFFF.
     E('    section gendata,data')
     E('    cnop 0,4')
-    tabs = collections.defaultdict(list)
-    for (c, e) in entries: tabs[c].append(e)
-    for c in range(8):
-        E('_disp_tab%d:' % c)
-        lst = sorted(tabs.get(c, []))
-        E('    dc.l %d' % len(lst))
-        for e in lst: E('    dc.l $%04x,%s' % (e, fname(c, e)))
-    E('_disp_tabs:')
-    E('    dc.l ' + ','.join('_disp_tab%d' % c for c in range(8)))
+    HS = 2048
+    slots = [None] * HS
+    for (c, e) in sorted(entries):
+        h = (e + c * 311) & (HS - 1)
+        while slots[h] is not None: h = (h + 1) & (HS - 1)
+        slots[h] = (c, e)
+    E('_disp_hash:')
+    for sl in slots:
+        E('    dc.w 0,0,0,0' if sl is None else '    dc.w $%04x,%d\n    dc.l %s' % (sl[1], sl[0], fname(sl[0], sl[1])))
     E('_reset_fn: dc.l %s' % fname(FIXED, reset))
     E('_nmi_fn: dc.l %s' % fname(FIXED, nmi))
 
     with open(os.path.join(outdir, 'gen68k.s'), 'w') as fo:
         fo.write('; generated by tools/recomp.py (back68k.py) from the game ROM: do not edit\n')
         fo.write('    section gencode,code\n')
-        fo.write('    xdef _disp_tabs,_reset_fn,_nmi_fn\n')
+        fo.write('    xdef _disp_hash,_reset_fn,_nmi_fn\n')
         fo.write('\n'.join(out) + '\n')
     return dict(must=must, exit_live=exit_live, entry_live=entry_live)

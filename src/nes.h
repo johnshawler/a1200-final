@@ -21,6 +21,7 @@ uint8_t nes_io_read(uint16_t a);                /* $2000-$7FFF */
 uint8_t nes_read_s0(void);                      /* $2002 read by a loop that waits for the sprite 0 hit */
 void    nes_write_slow(uint16_t a, uint8_t v);  /* everything at $2000 and above */
 void    nes_mmc_prg(uint8_t v);                 /* MMC1 PRG register in one step (src/nes68k.s) */
+void    nes_mmc_ctrl(uint8_t v);                /* MMC1 control register in one step */
 void    nes_init(const uint8_t *prg, const uint8_t *chr);
 void    nes_fatal(uint16_t pc, int why);        /* translated code reached something it cannot do */
 extern uint16_t nes_fatal_pc; extern int nes_fatal_why;

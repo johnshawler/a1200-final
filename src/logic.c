@@ -80,7 +80,11 @@ void game_tick(unsigned short in)
     co_resume();
 #endif
 #ifdef LOGIC_TRACE
+#ifdef LOGIC_NOSUM                              /* profiling builds: no checksum work in the ticks */
+    if (logic_ntrace < LOGIC_TRACE) logic_trace[logic_ntrace++] = 0;
+#else
     if (logic_ntrace < LOGIC_TRACE) logic_trace[logic_ntrace++] = game_checksum();
+#endif
 #ifdef LOGIC_DUMP
     if (logic_ntrace == LOGIC_DUMP) { int i; for (i = 0; i < 0x800; i++) logic_dump[i] = nes_ram[i];
         logic_dump[0x800] = cpu_a; logic_dump[0x801] = cpu_x; logic_dump[0x802] = cpu_y; logic_dump[0x803] = cpu_s;

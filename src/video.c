@@ -35,6 +35,14 @@
 #define PUTW(p, v) (((UBYTE *)(p))[0] = (UBYTE)((v) >> 8), ((UBYTE *)(p))[1] = (UBYTE)(v))
 #endif
 
+#ifdef LOGIC_TRACE
+ULONG vprof[4], vtiles;                 /* debug: colour clocks in cell redraws, streaming, sprites; tiles drawn */
+extern uint32_t logic_frames;
+#define VP(i, x) do { ULONG t0_ = sys_now(); x; if (logic_frames >= 2000 && logic_frames < 2500) vprof[i] += sys_now() - t0_; } while (0)
+#else
+#define VP(i, x) do { x; } while (0)
+#endif
+
 const DispCfg video_display = { PLANES, 1, 0, 240, 480, LEVEL_W, 1, 0, SPR_W, 1 };
 
 extern const uint8_t nes_chr_data[];
@@ -102,7 +110,16 @@ static UBYTE colstate[64];              /* by unwrapped column & 63: 1 drawn fro
 /* the NES hides its leftmost 8 pixels when PPUMASK bit 1 is clear: the game streams new columns there */
 static int col_visible(LONG uc) { LONG x = uc * 8; return x + 8 > cam_ux + ((ppu_mask & 2) ? 0 : 8) && x < cam_ux + 256; }
 
-static void draw_tile(LONG uc, int r)
+/* Each tile row is in the buffer twice (y and y + 240) so that any vertical scroll shows 240 contiguous lines,
+   but only the copies the current scroll shows are kept up to date: rowcopies[r] bit 0 = the copy at y,
+   bit 1 = the copy at y + 240. When the scroll brings the other copy into view, that row is drawn again. */
+static UBYTE rowcopies[30];
+static UBYTE row_need(int r, int sy) { return (UBYTE)((8 * r + 8 > sy ? 1 : 0) | (8 * r < sy ? 2 : 0)); }
+
+static void draw_tile_copies(LONG uc, int r, UBYTE copies);
+static void draw_tile(LONG uc, int r) { draw_tile_copies(uc, r, rowcopies[r]); }
+
+static void draw_tile_copies(LONG uc, int r, UBYTE copies)
 {
     UWORD cell = nt_cell(uc, r), base = cell & 0x400;
     UBYTE tile = nes_vram[cell], tx = (UBYTE)(uc & 31);
@@ -118,8 +135,8 @@ static void draw_tile(LONG uc, int r)
     { extern ULONG vtiles; vtiles++; }
 #endif
     d = disp_front + (ULONG)(r * 8) * 64 + ((x + disp_margin) >> 3);
-    tile8(d, src, (ULONG)(p3 << 8 | p2));
-    tile8(d + 240 * 64, src, (ULONG)(p3 << 8 | p2));     /* the copy for the vertical wrap */
+    if (copies & 1) tile8(d, src, (ULONG)(p3 << 8 | p2));
+    if (copies & 2) tile8(d + 240 * 64, src, (ULONG)(p3 << 8 | p2));     /* the copy for the vertical wrap */
 }
 
 /* the visible column range for the current camera, with a margin */
@@ -130,6 +147,21 @@ static void want_cols(LONG *lo, LONG *hi)
 }
 
 static void invalidate(void) { col_lo = 1; col_hi = 0; work_row = -1; }
+
+/* make every row's copies match what the scroll position sy shows */
+static void sync_rows(int sy)
+{
+    int r;
+    LONG uc;
+    for (r = 0; r < 30; r++) {
+        UBYTE need = row_need(r, sy), missing = (UBYTE)(need & ~rowcopies[r]);
+        if (missing && col_lo <= col_hi) {
+            for (uc = col_lo; uc <= col_hi; uc++) draw_tile_copies(uc, r, missing);
+            if (work_row > r) draw_tile_copies(work_col, r, missing);
+        }
+        rowcopies[r] = need;
+    }
+}
 
 /* draw up to n tiles of the columns that are needed but not drawn yet */
 static void stream_cols(int n)
@@ -161,9 +193,9 @@ static void fix_edges(void)
 {
     LONG uc;
     int r;
-    for (uc = col_lo; uc <= col_hi; uc++)
-        if (colstate[uc & 63] != (col_visible(uc) ? 1 : 2)) {
-            colstate[uc & 63] = col_visible(uc) ? 1 : 2;
+    for (uc = col_lo; uc <= col_hi; uc++)            /* blank columns that came into the picture; columns that */
+        if (colstate[uc & 63] == 2 && col_visible(uc)) { /* left it keep their (correct) content                */
+            colstate[uc & 63] = 1;
             for (r = 0; r < 30; r++) draw_tile(uc, r);
         }
 }
@@ -175,13 +207,15 @@ static int redraw_cell(UWORD i)
     int r, c, cnt = 0;
     if ((i & 0x3ff) < 0x3c0) {
         int cx = i & 31, row = (i >> 5) & 31, ntx = (i >> 10) & 1;
-        for (uc = uc0 + ((((ntx << 5) | cx) - uc0) & 63); uc <= col_hi; uc += 64) { draw_tile(uc, row); cnt++; }
-        if (work_row > row) { uc = work_col; if ((uc & 63) == ((ntx << 5) | cx)) { draw_tile(uc, row); cnt++; } }
+        for (uc = uc0 + ((((ntx << 5) | cx) - uc0) & 63); uc <= col_hi; uc += 64)
+            if (col_visible(uc)) { draw_tile(uc, row); cnt++; }       /* the border is not updated */
+        if (work_row > row) { uc = work_col; if ((uc & 63) == ((ntx << 5) | cx) && col_visible(uc)) { draw_tile(uc, row); cnt++; } }
     } else {
         int a = i & 0x3f, ntx = (i >> 10) & 1, ax = (a & 7) * 4, ay = (a >> 3) * 4;
         for (c = 0; c < 4; c++)
             for (uc = uc0 + ((((ntx << 5) | (ax + c)) - uc0) & 63); uc <= col_hi; uc += 64)
-                for (r = ay; r < ay + 4 && r < 30; r++) { draw_tile(uc, r); cnt++; }
+                if (col_visible(uc))
+                    for (r = ay; r < ay + 4 && r < 30; r++) { draw_tile(uc, r); cnt++; }
     }
     return cnt;
 }
@@ -207,7 +241,7 @@ static void build_groups(void)
         UBYTE y = nes_oam[i * 4], x = nes_oam[i * 4 + 3];
         WORD sy = (WORD)y + 1;
         if (y >= 0xef) continue;
-        for (j = 0; j < ngrp; j++) {
+        for (j = ngrp > 4 ? ngrp - 4 : 0; j < ngrp; j++) {   /* a metasprite's sprites come together in OAM */
             Group *g = &grp[j];
             WORD nx0 = x < g->x0 ? x : g->x0, nx1 = x + 8 > g->x1 ? x + 8 : g->x1;
             if (nx1 - nx0 > SPR_W || g->n >= MAXIN) continue;
@@ -219,7 +253,7 @@ static void build_groups(void)
             if ((nes_oam[i * 4 + 2] & 3) != 3) g->pal3only = 0;
             break;
         }
-        if (j == ngrp) {
+        if (j >= ngrp) {
             Group *g = &grp[ngrp++];
             g->x0 = x; g->x1 = x + 8; g->y0 = sy; g->y1 = sy + 8; g->n = 1; g->idx[0] = (UBYTE)i;
             g->pal3only = (nes_oam[i * 4 + 2] & 3) == 3;
@@ -227,7 +261,7 @@ static void build_groups(void)
     }
     /* merge groups that touch, while they fit */
     for (i = 0; i < ngrp; i++)
-        for (j = i + 1; j < ngrp; j++) {
+        for (j = i + 1; j < ngrp && j <= i + 6; j++) {   /* neighbours in OAM order only */
             Group *a = &grp[i], *b = &grp[j];
             WORD nx0 = a->x0 < b->x0 ? a->x0 : b->x0, nx1 = a->x1 > b->x1 ? a->x1 : b->x1;
             if (nx1 - nx0 > SPR_W || a->n + b->n > MAXIN) continue;
@@ -237,7 +271,7 @@ static void build_groups(void)
             if (b->y1 > a->y1) a->y1 = b->y1;
             for (k = 0; k < b->n; k++) a->idx[a->n++] = b->idx[k];
             a->pal3only &= b->pal3only;
-            grp[j] = grp[--ngrp]; j = i;            /* start again for this group */
+            grp[j] = grp[--ngrp]; j--;              /* look at the group moved into slot j */
         }
 }
 
@@ -293,12 +327,40 @@ static void clear_lines(UBYTE *p, int n)
     for (n >>= 4; n; n--) { l[0] = 0; l[1] = 0; l[2] = 0; l[3] = 0; l += 4; }
 }
 
+static UBYTE scr_e[16 * 256], scr_o[16 * 256];    /* one segment is put together here (fast RAM if there is any) */
+
+/* Segments drawn last frame, by content: a group with the same sprites, tiles, attributes and layout is copied
+   from the previous set of sprite lists (which stays untouched while this set is built) instead of drawn. */
+typedef struct { ULONG sig; UWORD n; UBYTE *e, *o; } Cached;
+static Cached cache[2][4 * NSEG];
+static int ncache[2];
+
+static ULONG group_sig(Group *g, int with_o)
+{
+    ULONG h = (ULONG)g->n * 0x9e3779b1UL ^ (ULONG)(g->y1 - g->y0) ^ ((ULONG)with_o << 31);
+    int k;
+    for (k = 0; k < g->n; k++) {
+        int i = g->idx[k];
+        int upper = split_on && (int)nes_oam[i * 4] + 1 <= split_line;
+        ULONG v = ((ULONG)nes_oam[i * 4 + 1] << 24) | ((ULONG)nes_oam[i * 4 + 2] << 16)
+                | ((ULONG)(UBYTE)(nes_oam[i * 4 + 3] - g->x0) << 8) | (UBYTE)(nes_oam[i * 4] + 1 - g->y0);
+        h = (h ^ v ^ (ULONG)upper) * 16777619UL + (ULONG)k;
+    }
+    return h;
+}
+
+static void copy_lines(UBYTE *d, const UBYTE *s, int n)
+{
+    ULONG *l = (ULONG *)d; const ULONG *m = (const ULONG *)s;
+    for (n >>= 4; n; n--) { l[0] = m[0]; l[1] = m[1]; l[2] = m[2]; l[3] = m[3]; l += 4; m += 4; }
+}
+
 static void build_sprites(void)
 {
     int k, s, n;
     spr_set ^= 1;
-    build_groups();
-    assign();
+    ncache[spr_set] = 0;
+    VP(3, { build_groups(); assign(); });
     for (k = 0; k < 4; k++) {
         Chan *c = &chan[k];
         int ne = k < 3 ? k * 2 : 6, no = k < 3 ? k * 2 + 1 : -1;
@@ -317,9 +379,25 @@ static void build_sprites(void)
                 PUTW(e + 8, ((ve & 0xff) << 8) | (((vs >> 8) & 1) << 2) | (((ve >> 8) & 1) << 1) | (hs & 1));
                 if (o) { PUTW(o, GETW(e)); PUTW(o + 8, GETW(e + 8) | 0x80); }
             }
-            clear_lines(e + 16, n);
-            if (o) clear_lines(o + 16, n);
-            render_group(g, e + 16, o ? o + 16 : 0);
+            {   ULONG sig = group_sig(g, o != 0);
+                Cached *cp = cache[spr_set ^ 1], *hit = 0;
+                int j;
+                for (j = 0; j < ncache[spr_set ^ 1]; j++) if (cp[j].sig == sig && cp[j].n == n) { hit = &cp[j]; break; }
+                if (hit) {
+                    copy_lines(e + 16, hit->e, n);
+                    if (o) copy_lines(o + 16, hit->o, n);
+                } else {
+                    clear_lines(scr_e, n);
+                    if (o) clear_lines(scr_o, n);
+                    render_group(g, scr_e, o ? scr_o : 0);
+                    copy_lines(e + 16, scr_e, n);       /* chip RAM is only written, once, a long at a time */
+                    if (o) copy_lines(o + 16, scr_o, n);
+                }
+                if (ncache[spr_set] < 4 * NSEG) {
+                    Cached *c2 = &cache[spr_set][ncache[spr_set]++];
+                    c2->sig = sig; c2->n = (UWORD)n; c2->e = e + 16; c2->o = o ? o + 16 : 0;
+                }
+            }
             e += 16 + n;
             if (o) o += 16 + n;
         }
@@ -363,12 +441,6 @@ void video_start(void)
     invalidate();
 }
 
-#ifdef LOGIC_TRACE
-ULONG vprof[4], vtiles;                 /* debug: colour clocks in cell redraws, streaming, sprites; tiles drawn */
-#define VP(i, x) do { ULONG t0_ = sys_now(); x; vprof[i] += sys_now() - t0_; } while (0)
-#else
-#define VP(i, x) do { x; } while (0)
-#endif
 
 void video_frame(void)
 {
@@ -403,6 +475,8 @@ void video_frame(void)
         nes_redraw_all = 0;
         invalidate();
     }
+
+    VP(1, sync_rows(sy));
 
     /* nametable cells the game wrote (a whole new screen: draw it again column by column) */
     if (nes_ndirty > 200) invalidate();

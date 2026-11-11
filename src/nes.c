@@ -1,4 +1,5 @@
 /* nes.c - NES memory map, MMC1 mapper and the PPU/APU/controller registers as plain state. See nes.h. */
+#include <string.h>
 #include "nes.h"
 
 uint8_t cpu_a, cpu_x, cpu_y, cpu_s = 0xfd, cpu_c, cpu_z = 1, cpu_n, cpu_v, cpu_i = 1, cpu_d;
@@ -141,6 +142,15 @@ void nes_mmc_prg(uint8_t v)
     mmc_shift = 0x10;
 }
 
+/* MMC1 register 0 (control) as five serial writes leave it */
+void nes_mmc_ctrl(uint8_t v)
+{
+    if ((v ^ mmc_ctrl) & 0x03) nes_redraw_all = 1;
+    mmc_ctrl = v;
+    map_prg();
+    mmc_shift = 0x10;
+}
+
 static void mmc1(uint16_t a, uint8_t v)
 {
     if (v & 0x80) { mmc_shift = 0x10; mmc_ctrl |= 0x0c; map_prg(); return; }
@@ -182,7 +192,10 @@ void nes_write_slow(uint16_t a, uint8_t v)
     if (a < 0x4020) {
         if (a == 0x4014) {                      /* OAM DMA */
             uint16_t src = (uint16_t)(v << 8); int i;
-            for (i = 0; i < 256; i++) nes_oam[(uint8_t)(ppu_oamaddr + i)] = nes_rd((uint16_t)(src + i));
+            if (src < 0x2000 && ppu_oamaddr == 0)          /* the usual case: a whole RAM page */
+                memcpy(nes_oam, nes_ram + (src & 0x7ff), 256);
+            else
+                for (i = 0; i < 256; i++) nes_oam[(uint8_t)(ppu_oamaddr + i)] = nes_rd((uint16_t)(src + i));
         } else if (a == 0x4016) {
             pad_strobe = v & 1;
             if (pad_strobe) pad_shift = nes_pad;
