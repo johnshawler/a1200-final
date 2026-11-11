@@ -9,7 +9,7 @@
         xref    _cpu_a,_cpu_s,_cpu_x,_cpu_y,_cpu_c,_cpu_z,_cpu_n,_cpu_v,_cpu_i,_cpu_d
 ;       _cpu_x,_cpu_y,_cpu_s,_cpu_c,_cpu_z,_cpu_n,_cpu_v,_cpu_i,_cpu_d
         xref    _nes_ram,_nes_prg_lo,_nes_prg_data,_nes_bank,_mmc_shift,_pad_shift,_pad_strobe,_nes_pad
-        xref    _nes_io_read,_nes_read_s0,_nes_write_slow,_nes_wait,_nes_fatal
+        xref    _nes_io_read,_nes_read_s0,_nes_write_slow,_nes_wait,_nes_fatal,_nes_mmc_prg
 
 ; ---- moving the 6502 state between the globals and the registers
 _load_state:
@@ -232,6 +232,16 @@ _io_wr_d2:
         movem.l d0-d1/a0-a1,-(sp)
         moveq   #0,d4
         move.b  d2,d4
+_mmc_prg:                               ; d4 = new MMC1 PRG register: as five serial writes would leave it
+        move.w  ccr,-(sp)
+        movem.l d0-d1/a0-a1,-(sp)
+        move.l  d4,-(sp)
+        jsr     _nes_mmc_prg
+        addq.l  #4,sp
+        move.l  _nes_prg_lo,a3
+        movem.l (sp)+,d0-d1/a0-a1
+        move.w  (sp)+,ccr
+        rts
 _io_wr_d4:
         move.w  ccr,-(sp)
         movem.l d0-d1/a0-a1,-(sp)
@@ -365,6 +375,12 @@ _inctab:
 N       set     0
         rept    256
         dc.b    (N+1)&255
+N       set     N+1
+        endr
+_revtab:                                ; bit-reversed bytes
+N       set     0
+        rept    256
+        dc.b    ((N&1)<<7)|((N&2)<<5)|((N&4)<<3)|((N&8)<<1)|((N&16)>>1)|((N&32)>>3)|((N&64)>>5)|((N&128)>>7)
 N       set     N+1
         endr
 _dectab:

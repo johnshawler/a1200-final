@@ -23,7 +23,10 @@
    and game_checksum live there. This file only shows the NES picture on the AGA display. */
 
 #define display video_display          /* src/video.c: 4 planes, scrolling, 64-pixel sprites */
-static ULONG palette[48];               /* all black until the game sets its colours */
+static ULONG palette[48];
+#ifdef LOGIC_TRACE
+uint32_t video_time_sum, video_time_max, video_calls;
+#endif               /* all black until the game sets its colours */
 
 static int game_load(void)
 {
@@ -57,7 +60,12 @@ static void read_keys(void)
 static void game_draw(void)
 {
     disp_begin();
+#ifdef LOGIC_TRACE
+    {   extern uint32_t video_time_sum, video_time_max, video_calls; ULONG t0 = sys_now(), dt;
+        video_frame(); dt = sys_now() - t0; video_time_sum += dt; video_calls++; if (dt > video_time_max) video_time_max = dt; }
+#else
     video_frame();
+#endif
     read_keys();
 #ifdef HOLD_AT                          /* debug: freeze the picture at a tick, for a screenshot */
     if (logic_frames >= HOLD_AT) { int i; disp_flip(); for (i = 0; i < 50 * 120 && !sys_keys[KEY_ESC]; i++) sys_wait_frame(); }
@@ -112,6 +120,11 @@ int main(int argc, char **argv)
             if (fh) { Write(fh, logic_trace, logic_ntrace * 4); Close(fh); }
             {   extern uint8_t logic_dump[]; fh = Open((CONST_STRPTR)"dump.bin", MODE_NEWFILE);
                 if (fh) { Write(fh, logic_dump, 0x808); Close(fh); } }
+            {   extern uint32_t video_time_sum, video_time_max, video_calls; char b[200];
+                extern ULONG vprof[], vtiles;
+                sprintf(b, "video avg %lu max %lu calls %lu cells %lu stream %lu sprites %lu tiles %lu\n", (unsigned long)(video_calls ? video_time_sum / video_calls : 0), (unsigned long)video_time_max, (unsigned long)video_calls,
+                        (unsigned long)vprof[0], (unsigned long)vprof[1], (unsigned long)vprof[2], (unsigned long)vtiles);
+                fh = Open((CONST_STRPTR)"video.txt", MODE_NEWFILE); if (fh) { Write(fh, b, strlen(b)); Close(fh); } }
             {   extern uint32_t logic_time[]; fh = Open((CONST_STRPTR)"ticktime.bin", MODE_NEWFILE);
                 if (fh) { Write(fh, logic_time, logic_ntrace * 4); Close(fh); } }
         }

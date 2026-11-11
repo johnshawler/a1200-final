@@ -66,6 +66,8 @@ static void shot(const char *name)
     fclose(f);
 }
 
+static const char *key0(unsigned t) { static char k[32]; snprintf(k, sizeof k, ",%u,", t); return k; }
+
 int main(int argc, char **argv)
 {
     unsigned n = atoi(argv[1]), t; char key[32], list[4096], name[64]; FILE *g;
@@ -75,6 +77,7 @@ int main(int argc, char **argv)
     game_init(); video_load(); disp_open(&video_display); video_start();
     for (t = 0; t < n; t++) {
         game_tick(game_bench_input(t));
+        if (getenv("EVERY") && t % atoi(getenv("EVERY")) && !strstr(list, key0(t + 1))) continue;   /* draw only every Nth tick, like a slow Amiga */
         video_frame();
         snprintf(key, sizeof key, ",%u,", t + 1);
         if (strstr(list, key)) { snprintf(name, sizeof name, "vhost_%05u.ppm", t + 1); shot(name); }

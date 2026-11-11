@@ -32,6 +32,65 @@ BRANCH = {'BPL': 'bpl', 'BMI': 'bmi', 'BEQ': 'beq', 'BNE': 'bne'}
 INV = {'bcc': 'bcs', 'bcs': 'bcc', 'beq': 'bne', 'bne': 'beq', 'bpl': 'bmi', 'bmi': 'bpl'}
 
 
+# Hand-written equivalents of hot 6502 routines (exact: same RAM, same stack bytes left below S, same
+# registers and flags on return). The host test runs the original code, so equal checksums prove them.
+HLE = {
+    # $CEBD: read both controllers twice until equal, keep the edges and per-button hold counters.
+    # Port 2 reads $4017, which is always 0 here. Effects worked out from the code at $CEBD-$CF25.
+    (7, 0xcebd): """
+    moveq #0,d4
+    move.b _nes_pad,d4
+    move.b (_revtab,d4.w),d4
+    move.b #$ce,-1(a2)
+    move.b #$ce,-2(a2)
+    move.b #$ce,-3(a2)
+    move.b #$e3,-4(a2)
+    clr.b $18-$80(a5)
+    clr.b $19-$80(a5)
+    move.b d4,$8f-$80(a5)
+    clr.b $90-$80(a5)
+    lea $97-$80(a5),a0
+    move.b d4,d7
+    moveq #7,d3
+.c  lsr.b #1,d7
+    bcc.s .z
+    addq.b #1,(a0)
+    bra.s .n
+.z  clr.b (a0)
+.n  clr.b 1(a0)
+    addq.l #2,a0
+    dbf d3,.c
+    move.b $8d-$80(a5),d7
+    eor.b d4,d7
+    and.b d4,d7
+    move.b d7,$91-$80(a5)
+    move.b d4,$8d-$80(a5)
+    clr.b $92-$80(a5)
+    clr.b $8e-$80(a5)
+    move.b d7,$31-$80(a5)
+    move.b d4,$30-$80(a5)
+    move.b _nes_pad,_pad_shift
+    clr.b _pad_strobe
+    moveq #$11,d1
+    moveq #0,d2
+    move.b d4,d0
+    ori.b #$10,ccr""",
+    # $C14E: STA $27, then the five serial MMC1 writes of A to the PRG register. Only when the shift register
+    # is idle and A has no reset bit (what the game always does); otherwise the translated code runs (.orig).
+    (7, 0xc14e): """
+    btst #7,d0
+    bne .orig
+    cmp.b #$10,_mmc_shift
+    bne .orig
+    move.b d0,$27-$80(a5)
+    moveq #$1f,d4
+    and.b d0,d4
+    bsr _mmc_prg
+    lsr.b #4,d0
+    tst.b $2d-$80(a5)""",
+}
+HLE_FALLBACK = {(7, 0xc14e)}
+
 def generate(g):
     entries, body, insn, ctx_of = g['entries'], g['body'], g['insn'], g['ctx_of']
     FIXED, NORETURN, static_branch, successors = g['FIXED'], g['NORETURN'], g['static_branch'], g['successors']
@@ -256,6 +315,12 @@ def generate(g):
         labels.add(e)
         stubs = []
         E('%s:' % fname(ctx, e))
+        if (ctx, e) in HLE:
+            E('; hand-written equivalent of the 6502 routine')
+            for l in HLE[(ctx, e)].strip('\n').split('\n'): E(l)
+            for l in ['move.w ccr,d6', 'movea.l (sp)+,a0', 'cmpm.w (a2)+,(a0)+', 'bne _unwind', 'move.w d6,ccr', 'jmp (a0)']: E('    ' + l)
+            if (ctx, e) not in HLE_FALLBACK: continue
+            E('.orig:')
         if addrs and addrs[0] != e: E('    bra .L%04x' % e)
         nzsrc = None; c68 = None; known_c = None; fuse = None
         # waits

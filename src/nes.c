@@ -133,6 +133,14 @@ uint8_t nes_read_s0(void)
     return r;
 }
 
+/* the PRG register as five serial writes leave it (the 68k version of the game's bank switch calls this) */
+void nes_mmc_prg(uint8_t v)
+{
+    mmc_prg = v;
+    map_prg();
+    mmc_shift = 0x10;
+}
+
 static void mmc1(uint16_t a, uint8_t v)
 {
     if (v & 0x80) { mmc_shift = 0x10; mmc_ctrl |= 0x0c; map_prg(); return; }
