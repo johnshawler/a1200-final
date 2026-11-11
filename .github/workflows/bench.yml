@@ -9,6 +9,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Install the emulator and the compiler
+        timeout-minutes: 20       # setup.sh limits its own downloads; this is the backstop
         run: tools/setup.sh
       - name: The kit is unchanged
         run: tools/check_kit.sh

@@ -52,6 +52,9 @@ skeleton, so a fresh copy of this template passes:
     frames=500 late=0 worst_pct=3 avg_pct=3 shown_fps=50.0 ticks=500 checksum=00235400
     PASS (50 Hz held)
 
+`tools/setup.sh` puts a time limit on its downloads and tries them twice. If it still ends with
+`setup: FAILED`, the machine or its network is at fault, not the port: run it again, or re-run the CI job.
+
 ## What has and has not been tested
 
 - Everything in `kit/` and `tools/` ran on an emulated stock A1200 under the free AROS ROM. Nothing ran on a
