@@ -13,6 +13,7 @@
 #include "disp.h"
 #include "perf.h"
 #include "logic.h"
+#include "video.h"
 
 #undef TICKS_PER_SECOND
 #define TICKS_PER_SECOND 60             /* the NES runs at 60 frames a second: 6 ticks every 5 frames */
@@ -21,22 +22,46 @@
 /* The game logic is the NES program translated to C (src/logic.c, src/gen_*.c): game_tick, game_bench_input
    and game_checksum live there. This file only shows the NES picture on the AGA display. */
 
-static const DispCfg display = { 4, 1, 0, 240, 480, 8192, 3, 0, 16, 1 };
-static ULONG palette[48];
+#define display video_display          /* src/video.c: 4 planes, scrolling, 64-pixel sprites */
+static ULONG palette[48];               /* all black until the game sets its colours */
 
 static int game_load(void)
 {
+#ifdef LOGIC_TRACE
+    { extern uint32_t (*logic_clock)(void); logic_clock = (uint32_t (*)(void))sys_now; }
+#endif
     game_init();
-    return 1;
+    return video_load();
 }
 
 static void game_start(void)
 {
+    video_start();
+}
+
+/* Keys for the NES buttons the joystick does not have (bits as in nes_pad): A, B, Select, Start, pad */
+static void read_keys(void)
+{
+    UBYTE p = 0;
+    if (sys_keys[0x32]) p |= 0x01;                  /* X      = A */
+    if (sys_keys[0x31] || sys_keys[0x64]) p |= 0x02; /* Z, Alt = B */
+    if (sys_keys[KEY_SPACE]) p |= 0x04;             /* Space  = Select */
+    if (sys_keys[KEY_RET] || sys_keys[0x43]) p |= 0x08; /* Return = Start */
+    if (sys_keys[KEY_UP]) p |= 0x10;
+    if (sys_keys[KEY_DOWN]) p |= 0x20;
+    if (sys_keys[KEY_LEFT]) p |= 0x40;
+    if (sys_keys[KEY_RIGHT]) p |= 0x80;
+    logic_extra_pad = p;
 }
 
 static void game_draw(void)
 {
     disp_begin();
+    video_frame();
+    read_keys();
+#ifdef HOLD_AT                          /* debug: freeze the picture at a tick, for a screenshot */
+    if (logic_frames >= HOLD_AT) { int i; disp_flip(); for (i = 0; i < 50 * 120 && !sys_keys[KEY_ESC]; i++) sys_wait_frame(); }
+#endif
 }
 
 /* ---- the loop: keep as it is ------------------------------------------------------------------ */
@@ -87,6 +112,8 @@ int main(int argc, char **argv)
             if (fh) { Write(fh, logic_trace, logic_ntrace * 4); Close(fh); }
             {   extern uint8_t logic_dump[]; fh = Open((CONST_STRPTR)"dump.bin", MODE_NEWFILE);
                 if (fh) { Write(fh, logic_dump, 0x808); Close(fh); } }
+            {   extern uint32_t logic_time[]; fh = Open((CONST_STRPTR)"ticktime.bin", MODE_NEWFILE);
+                if (fh) { Write(fh, logic_time, logic_ntrace * 4); Close(fh); } }
         }
 #endif
     }

@@ -18,6 +18,8 @@ uint8_t logic_extra_pad;
 #ifdef LOGIC_TRACE                              /* debug builds: the checksum after every tick */
 uint32_t logic_trace[LOGIC_TRACE]; unsigned logic_ntrace;
 uint8_t logic_dump[0x808];
+uint32_t logic_time[LOGIC_TRACE];               /* colour clocks each tick took (Amiga debug builds) */
+uint32_t (*logic_clock)(void);
 #endif
 uint32_t logic_frames;
 static uint32_t co_stack[32768 / 4];            /* the NES main thread's C stack */
@@ -70,7 +72,13 @@ void game_tick(unsigned short in)
     if (in & IN_LEFT) p |= 0x40;
     if (in & IN_RIGHT) p |= 0x80;
     nes_pad = p;
+#ifdef LOGIC_TRACE
+    {   uint32_t t0 = logic_clock ? logic_clock() : 0;
+        co_resume();
+        if (logic_ntrace < LOGIC_TRACE) logic_time[logic_ntrace] = logic_clock ? logic_clock() - t0 : 0; }
+#else
     co_resume();
+#endif
 #ifdef LOGIC_TRACE
     if (logic_ntrace < LOGIC_TRACE) logic_trace[logic_ntrace++] = game_checksum();
 #ifdef LOGIC_DUMP

@@ -8,7 +8,7 @@
         xdef    _asm_run,_asm_dispatch
         xref    _cpu_a,_cpu_s,_cpu_x,_cpu_y,_cpu_c,_cpu_z,_cpu_n,_cpu_v,_cpu_i,_cpu_d
 ;       _cpu_x,_cpu_y,_cpu_s,_cpu_c,_cpu_z,_cpu_n,_cpu_v,_cpu_i,_cpu_d
-        xref    _nes_ram,_nes_prg_lo,_nes_prg_data,_nes_bank
+        xref    _nes_ram,_nes_prg_lo,_nes_prg_data,_nes_bank,_mmc_shift,_pad_shift,_pad_strobe,_nes_pad
         xref    _nes_io_read,_nes_read_s0,_nes_write_slow,_nes_wait,_nes_fatal
 
 ; ---- moving the 6502 state between the globals and the registers
@@ -186,7 +186,20 @@ _wait:  bsr     _store_state
 ; ---- memory that is not plain RAM or ROM. All keep d0-d3, d5-d7, a0-a6 and the flags.
 _io_rd:                                 ; a0 = address -> d4
         move.w  ccr,-(sp)
-        movem.l d0-d1/a0-a1,-(sp)
+        cmpa.w  #$4016,a0               ; the controller: done here, as nes_io_read() does it
+        bne.s   .slow
+        move.b  _pad_shift,d4
+        tst.b   _pad_strobe
+        bne.s   .1
+        move.b  d4,d3
+        lsr.b   #1,d3
+        or.b    #$80,d3
+        move.b  d3,_pad_shift
+.1      and.b   #1,d4
+        or.b    #$40,d4
+        move.w  (sp)+,ccr
+        rts
+.slow   movem.l d0-d1/a0-a1,-(sp)
         move.l  a0,-(sp)
         jsr     _nes_io_read
         addq.l  #4,sp
@@ -223,12 +236,33 @@ _io_wr_d4:
         move.w  ccr,-(sp)
         movem.l d0-d1/a0-a1,-(sp)
         and.l   #$ff,d4
-_io_wr: move.l  d4,-(sp)
+_io_wr: cmpa.l  #$8000,a0               ; MMC1: four of the five serial writes only shift
+        bcs.s   .pad
+        btst    #7,d4
+        bne.s   .call
+        move.b  _mmc_shift,d3
+        btst    #0,d3
+        bne.s   .call                   ; the fifth: nes_write_slow() loads the register
+        lsr.b   #1,d3
+        btst    #0,d4
+        beq.s   .m1
+        or.b    #$10,d3
+.m1     move.b  d3,_mmc_shift
+        bra.s   .done
+.pad    cmpa.w  #$4016,a0               ; controller strobe
+        bne.s   .call
+        move.b  d4,d3
+        and.b   #1,d3
+        move.b  d3,_pad_strobe
+        beq.s   .done
+        move.b  _nes_pad,_pad_shift
+        bra.s   .done
+.call   move.l  d4,-(sp)
         move.l  a0,-(sp)
         jsr     _nes_write_slow
         addq.l  #8,sp
         move.l  _nes_prg_lo,a3          ; a mapper write may have switched the bank
-        movem.l (sp)+,d0-d1/a0-a1
+.done   movem.l (sp)+,d0-d1/a0-a1
         move.w  (sp)+,ccr
         rts
 

@@ -12,7 +12,7 @@ uint8_t ppu_ctrl, ppu_mask, ppu_fx, ppu_vbl;
 uint16_t ppu_t;
 static uint16_t ppu_v; static uint8_t ppu_w, ppu_oamaddr, ppu_rdbuf, ppu_s0;
 uint8_t mmc_ctrl = 0x0c, mmc_chr0, mmc_chr1, mmc_prg;
-static uint8_t mmc_shift = 0x10;
+uint8_t mmc_shift = 0x10;                       /* also used by the 68k fast paths in src/nes68k.s */
 
 uint16_t nes_dirty[NES_DIRTY_MAX];
 uint16_t nes_ndirty;
@@ -24,7 +24,7 @@ uint16_t split_t;
 
 uint8_t apu_reg[0x18], apu_trig;
 uint8_t nes_pad;
-static uint8_t pad_shift, pad_strobe;
+uint8_t pad_shift, pad_strobe;                 /* also used by src/nes68k.s */
 
 static void map_prg(void)
 {
