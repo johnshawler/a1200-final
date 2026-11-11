@@ -6,7 +6,7 @@ model can do the port. It holds the instructions (`BRIEF.md`), a tested kit (`ki
 
 ## Use it
 
-1. Create a new repository from this template. One repository per port.
+1. Create a new repository from this template with the **Use this template** button. One repository per port.
 2. Put the game to port in `original/`: its source, its data, and a README saying how it runs.
 3. Give a coding agent this prompt:
 
@@ -61,7 +61,16 @@ skeleton, so a fresh copy of this template passes:
 - The CI workflow uses the same commands that ran locally but has not yet run on GitHub's runners.
 - The emulator charges too little time for multiply, divide and shift, which is why the gate is 80% and not 100%.
 
+## Licence
+
+MIT: see `LICENSE`. It covers everything in this repository except the two third-party parts below.
+
+A repository made from this template gets a copy of that file. The copy still covers only what came from the
+template. The game you put in `original/`, and your port of it, are governed by the game's own licence.
+
 ## Third-party parts
 
-`kit/c2p/` is from Mikael Kalms' C2P collection (public domain, see `kit/c2p/kalms-readme.txt`).
-`kit/ptplayer/` is Frank Wille's ptplayer (public domain, see `kit/ptplayer/license`).
+Both are public domain and keep their own terms.
+
+- `kit/c2p/` is from Mikael Kalms' C2P collection: see `kit/c2p/kalms-readme.txt`.
+- `kit/ptplayer/` is Frank Wille's ptplayer: see `kit/ptplayer/license`.
