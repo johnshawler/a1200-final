@@ -487,7 +487,7 @@ void video_frame(void)
     /* while the visible part is incomplete (a new screen), show black and draw quickly, as the NES's own
        screen changes do; otherwise a few tiles a frame keep ahead of the scrolling */
     want_cols(&vlo, &vhi);
-    budget = (on && col_lo <= vlo && col_hi >= vhi) ? 24 : 400;
+    budget = (on && col_lo <= vlo && col_hi >= vhi) ? 24 : 110;
     VP(1, stream_cols(budget));
     if (!(col_lo <= vlo && col_hi >= vhi)) on = 0;
     if (col_lo <= col_hi) fix_edges();

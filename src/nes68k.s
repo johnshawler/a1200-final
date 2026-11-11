@@ -6,9 +6,10 @@
 ; This file is included by src/gen68k.s, in its code section, so that the many bsr to these helpers stay
 ; inside one section. It is not assembled on its own.
         xdef    _asm_run,_asm_dispatch
+        xdef    _dispatch,_unwind,_io_rd,_io_wr,_rd_ea,_wr_ea_d0,_php,_plp,_set_prg,_wait   ; for the profiler only
         xref    _cpu_a,_cpu_s,_cpu_x,_cpu_y,_cpu_c,_cpu_z,_cpu_n,_cpu_v,_cpu_i,_cpu_d
 ;       _cpu_x,_cpu_y,_cpu_s,_cpu_c,_cpu_z,_cpu_n,_cpu_v,_cpu_i,_cpu_d
-        xref    _nes_ram,_nes_prg_lo,_nes_prg_hi,_nes_prg_data,_nes_bank,_mmc_shift,_mmc_chr0,_mmc_chr1,_mmc_ctrl,_mmc_prg,_pad_shift,_pad_strobe,_nes_pad
+        xref    _nes_ram,_nes_prg_lo,_nes_prg_hi,_nes_prg_data,_ppu_v,_ppu_ctrl,_nes_vram,_nes_dirty,_nes_dirty_flag,_nes_ndirty,_nes_redraw_all,_nes_bank,_mmc_shift,_mmc_chr0,_mmc_chr1,_mmc_ctrl,_mmc_prg,_pad_shift,_pad_strobe,_nes_pad
         xref    _nes_io_read,_nes_read_s0,_nes_write_slow,_nes_wait,_nes_fatal,_nes_mmc_prg,_nes_mmc_ctrl
 
 ; ---- moving the 6502 state between the globals and the registers
@@ -270,27 +271,63 @@ _io_wr_d4:
         move.w  ccr,-(sp)
         movem.l d0-d1/a0-a1,-(sp)
         and.l   #$ff,d4
-_io_wr: cmpa.l  #$8000,a0               ; MMC1: four of the five serial writes only shift
-        bcs.s   .pad
+_io_wr: cmpa.w  #$2007,a0               ; PPU data port: nametable writes done here, as vram_write() in nes.c
+        bne     .nt9
+        move.b  _mmc_ctrl,d3
+        and.b   #3,d3
+        cmp.b   #2,d3                   ; vertical mirroring only (the game's)
+        bne     .call
+        move.w  _ppu_v,d3
+        and.w   #$3fff,d3
+        cmp.w   #$2000,d3
+        bcs     .call
+        cmp.w   #$3f00,d3
+        bcc     .call
+        and.w   #$7ff,d3                ; nametable cell
+        lea     _nes_vram,a0
+        cmp.b   (a0,d3.w),d4
+        beq.s   .inc
+        move.b  d4,(a0,d3.w)
+        lea     _nes_dirty_flag,a0
+        tst.b   (a0,d3.w)
+        bne.s   .inc
+        move.w  _nes_ndirty,d4
+        cmp.w   #1024,d4                ; NES_DIRTY_MAX
+        bcs.s   .mk
+        move.b  #1,_nes_redraw_all
+        bra.s   .inc
+.mk     move.b  #1,(a0,d3.w)
+        lea     _nes_dirty,a0
+        add.w   d4,d4
+        move.w  d3,(a0,d4.w)
+        addq.w  #1,_nes_ndirty
+.inc    moveq   #1,d3
+        btst    #2,_ppu_ctrl
+        beq.s   .i1
+        moveq   #32,d3
+.i1     add.w   d3,_ppu_v
+        bra     .done
+.nt9    cmpa.l  #$8000,a0               ; MMC1: four of the five serial writes only shift
+        bcs     .pad
         btst    #7,d4
-        bne.s   .call
+        bne     .call
         move.b  _mmc_shift,d3
         btst    #0,d3
-        bne.s   .call                   ; the fifth: nes_write_slow() loads the register
+        bne     .call                   ; the fifth: nes_write_slow() loads the register
         lsr.b   #1,d3
         btst    #0,d4
         beq.s   .m1
         or.b    #$10,d3
 .m1     move.b  d3,_mmc_shift
-        bra.s   .done
+        bra     .done
 .pad    cmpa.w  #$4016,a0               ; controller strobe
-        bne.s   .call
+        bne     .call
         move.b  d4,d3
         and.b   #1,d3
         move.b  d3,_pad_strobe
-        beq.s   .done
+        beq     .done
         move.b  _nes_pad,_pad_shift
-        bra.s   .done
+        bra     .done
 .call   move.l  d4,-(sp)
         move.l  a0,-(sp)
         jsr     _nes_write_slow

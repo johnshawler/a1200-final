@@ -11,7 +11,8 @@ uint16_t nes_fatal_pc; int nes_fatal_why;
 uint8_t nes_vram[0x800], nes_pal[32], nes_oam[256];
 uint8_t ppu_ctrl, ppu_mask, ppu_fx, ppu_vbl;
 uint16_t ppu_t;
-static uint16_t ppu_v; static uint8_t ppu_w, ppu_oamaddr, ppu_rdbuf, ppu_s0;
+uint16_t ppu_v;                                 /* also used by the 68k fast path in src/nes68k.s */
+static uint8_t ppu_w, ppu_oamaddr, ppu_rdbuf, ppu_s0;
 uint8_t mmc_ctrl = 0x0c, mmc_chr0, mmc_chr1, mmc_prg;
 uint8_t mmc_shift = 0x10;                       /* also used by the 68k fast paths in src/nes68k.s */
 
