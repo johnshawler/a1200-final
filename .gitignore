@@ -11,3 +11,10 @@ __pycache__/
 *.pyc
 *_host
 frame_*.ppm
+# copyrighted inputs and everything derived from them: never published (this repository is public)
+original/*.nes
+*.rom
+assets/*
+!assets/.gitkeep
+src/gen_*
+src/gen68k.s
