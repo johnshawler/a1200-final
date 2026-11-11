@@ -24,7 +24,10 @@ fail() {
 APT_OPTS=""; LIST=""
 trap '[ -z "$LIST" ] || rm -f "$LIST"' EXIT           # the second try's temporary source list
 apt_get() { $SUDO env DEBIAN_FRONTEND=noninteractive timeout "$1" apt-get -q $APT_OPTS "${@:2}"; }
-download() { apt_get $T_INDEX update || true; apt_get $T_FILES install -y --download-only $NEED; }
+download() {                                        # "first": no index, no waiting for packages: go to the second try
+  apt_get $T_INDEX update || { [ "$1" != first ] || return 1; }
+  apt_get $T_FILES install -y --download-only $NEED
+}
 
 NEED=""
 for p in fs-uae xvfb imagemagick xdotool libgl1-mesa-dri; do
@@ -32,7 +35,7 @@ for p in fs-uae xvfb imagemagick xdotool libgl1-mesa-dri; do
 done
 if [ -n "$NEED" ]; then
   echo "setup: installing$NEED"
-  if ! download; then
+  if ! download first; then
     echo "setup: the package servers did not deliver. Trying once more."
     sleep 20
     CODENAME=$(. /etc/os-release; [ "$ID" = ubuntu ] && echo "$VERSION_CODENAME" || true)

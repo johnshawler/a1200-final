@@ -61,7 +61,9 @@ skeleton, so a fresh copy of this template passes:
   real A1200 or under a Commodore Kickstart ROM: the last word is `<program> bench 3000` on real hardware.
 - Five trial ports of the `samples/` games were made by smaller models from the brief and kit alone; the
   results are in the brief's last section and in `samples/README.md`.
-- The CI workflow uses the same commands that ran locally but has not yet run on GitHub's runners.
+- The CI workflow has run on GitHub's hosted `ubuntu-24.04` runners: the bench there printed the same line and
+  checksum as the local run. GitHub's own package mirrors were unreachable from the runner that day, so the run
+  also went through the second download try in `tools/setup.sh`.
 - The emulator charges too little time for multiply, divide and shift, which is why the gate is 80% and not 100%.
 
 ## Licence
