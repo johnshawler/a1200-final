@@ -14,6 +14,7 @@
 #include "perf.h"
 #include "logic.h"
 #include "video.h"
+#include "sound.h"
 
 #undef TICKS_PER_SECOND
 #define TICKS_PER_SECOND 60             /* the NES runs at 60 frames a second: 6 ticks every 5 frames */
@@ -34,12 +35,13 @@ static int game_load(void)
     { extern uint32_t (*logic_clock)(void); logic_clock = (uint32_t (*)(void))sys_now; }
 #endif
     game_init();
-    return video_load();
+    return video_load() && sound_load();
 }
 
 static void game_start(void)
 {
     video_start();
+    sound_start();
 }
 
 /* Keys for the NES buttons the joystick does not have (bits as in nes_pad): A, B, Select, Start, pad */
@@ -66,6 +68,7 @@ static void game_draw(void)
 #else
     video_frame();
 #endif
+    sound_frame();
     read_keys();
 #ifdef HOLD_AT                          /* debug: freeze the picture at a tick, for a screenshot */
     if (logic_frames >= HOLD_AT) { int i; disp_flip(); for (i = 0; i < 50 * 120 && !sys_keys[KEY_ESC]; i++) sys_wait_frame(); }
