@@ -9,22 +9,26 @@ Display:               planes=4 scroll=1 fetch=0 buffers=1 sprites used=7 (3 att
 Busiest moment:        fielding: camera scrolling in x and y, ~40 NES sprites, NES CPU 95-100% busy.
                        Not a Step 2 sum: the logic alone is ~85% of a frame per NES frame there (measured, debug build,
                        p90 60,695 colour clocks a tick), and 6 NES frames fall in 5 Amiga frames.
-Cut from the original: sound (no NES APU on Paula: see NOTES.md); sprite-behind-background priority (sprites always in
-                       front); the 32-pixel side borders show the backdrop colour; sprite clusters that find no free
-                       hardware sprite would be dropped (none dropped in the 3000-tick host run).
-Stock A1200 bench:     frames=1644 late=1077 worst_cck=1316816 avg_cck=75379 budget_cck=71051 worst_pct=1853 avg_pct=106 display_hz=50 shown_fps=30.2
+Cut from the original: sprite-behind-background priority (sprites always in front); the 32-pixel side borders
+                       show the backdrop colour; very high NES notes are clamped to Paula's fastest rate; sprite
+                       clusters that find no free hardware sprite would be dropped (none dropped in the 3000-tick host run).
+                       Sound is in: the NES APU (2 pulse, triangle, noise; the game uses no DMC) modelled on Paula.
+Stock A1200 bench:     frames=1645 late=1078 worst_cck=1312637 avg_cck=77124 budget_cck=71051 worst_pct=1847 avg_pct=108 display_hz=50 shown_fps=30.2
                        ticks=3000 checksum=b5a58399  (FS-UAE 3.1.66, tools/bench.sh, AROS ROM)
-With 4 MB fast RAM:    frames=1987 late=530 worst_cck=771590 avg_cck=44168 budget_cck=71051 worst_pct=1085 avg_pct=62 display_hz=50 shown_fps=39.4
+With 4 MB fast RAM:    frames=1981 late=537 worst_cck=770150 avg_cck=45305 budget_cck=71051 worst_pct=1083 avg_pct=63 display_hz=50 shown_fps=39.3
                        ticks=3000 checksum=b5a58399
+With 8 MB fast RAM:    frames=1981 late=537 worst_cck=770150 avg_cck=45305 budget_cck=71051 worst_pct=1083 avg_pct=63 display_hz=50 shown_fps=39.3
+                       ticks=3000 checksum=b5a58399  (tools/bench.sh dist llb 3000 shot.png --fast_memory=8192)
 Host checksum:         b5a58399 after 3000 ticks  equal
-Frame rate claim:      30.2 fps shown, logic at 60 ticks a second (game time follows the clock). 50 Hz NOT held:
+Frame rate claim:      30.2 fps shown (with sound), logic at 60 ticks a second (game time follows the clock). 50 Hz NOT held:
                        tools/port.sh prints FAIL (late=1077, worst_pct=1853).
                        Where the time goes: the game's own code, translated, runs from chip RAM at ~10-13 colour clocks
                        per 6502 instruction; the NES program needs 2,000 (batting) to 11,000 (fielding) instructions per
-                       NES frame. Fast RAM gives 39.4 fps. Cheapest upgrade likely to reach 50 Hz: a 68030 accelerator
+                       NES frame. Fast RAM gives 39.3 fps; 8 MB is no faster than 4 MB (the gain is code out of chip RAM, not size). Cheapest upgrade likely to reach 50 Hz: a 68030 accelerator
                        with fast RAM (not measured; the brief's own figure is ~6x for logic).
 Not done, not tested:  real A1200 hardware, a Commodore Kickstart ROM (the user supplied one; it was not used: the kit's
-                       bench boots the AROS ROM), NTSC machines, sound, interactive play beyond the scripted bench
+                       bench boots the AROS ROM), NTSC machines, the sound by ear (checked as a WAV from tools/shost.c, not
+                       listened to on the emulator), interactive play beyond the scripted bench
                        (controls are wired but untested by a person), CI (the ROM cannot be committed to this public
                        repository, so CI has nothing to build).
 How to run:            put the ROM at original/llb.nes, run tools/make_assets.sh, then tools/port.sh (or tools/build.sh
