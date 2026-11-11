@@ -26,6 +26,15 @@
 #define VIEW_X   32                     /* the 256-pixel NES picture starts 32 pixels into the 320-pixel view */
 #define SPR_W    64
 
+/* 16-bit big-endian access: a plain word access on the Amiga; byte by byte for the host harness tools/vhost.c */
+#ifdef __m68k__
+#define GETW(p)    (*(UWORD *)(p))
+#define PUTW(p, v) (*(UWORD *)(p) = (UWORD)(v))
+#else
+#define GETW(p)    ((UWORD)(((UBYTE *)(p))[0] << 8 | ((UBYTE *)(p))[1]))
+#define PUTW(p, v) (((UBYTE *)(p))[0] = (UBYTE)((v) >> 8), ((UBYTE *)(p))[1] = (UBYTE)(v))
+#endif
+
 const DispCfg video_display = { PLANES, 1, 0, 240, 480, LEVEL_W, 1, 0, SPR_W, 1 };
 
 extern const uint8_t nes_chr_data[];
@@ -235,17 +244,17 @@ static void render_group(Group *g, UBYTE *e, UBYTE *o)
         for (r = 0; r < 8; r++) {
             int row = (at & 0x80) ? 7 - r : r, line = dy + r, off;
             UBYTE p0 = src[row], p1 = src[row + 8], m;
-            UWORD M, *w;
+            UWORD M; UBYTE *w;
             if (at & 0x40) { p0 = flip_tab[p0]; p1 = flip_tab[p1]; }
             m = p0 | p1;
             if (!m) continue;
             M = (UWORD)(~(m << sh));
             off = line * 16 + (dx >> 3);
-            w = (UWORD *)(e + off);     *w = (UWORD)((*w & M) | (p0 << sh));
-            w = (UWORD *)(e + off + 8); *w = (UWORD)((*w & M) | (p1 << sh));
+            w = e + off;     PUTW(w, (GETW(w) & M) | (p0 << sh));
+            w = e + off + 8; PUTW(w, (GETW(w) & M) | (p1 << sh));
             if (o) {
-                w = (UWORD *)(o + off);     *w = (UWORD)((*w & M) | (pl2[m] << sh));
-                w = (UWORD *)(o + off + 8); *w = (UWORD)((*w & M) | (pl3[m] << sh));
+                w = o + off;     PUTW(w, (GETW(w) & M) | (pl2[m] << sh));
+                w = o + off + 8; PUTW(w, (GETW(w) & M) | (pl3[m] << sh));
             }
         }
     }
@@ -271,9 +280,9 @@ static void build_sprites(void)
                 disp_sprite((UWORD)ne, (UWORD *)e, x, y, (UWORD)h, 0);
                 if (o) disp_sprite((UWORD)no, (UWORD *)o, x, y, (UWORD)h, 1);
             } else {
-                ((UWORD *)e)[0] = (UWORD)(((vs & 0xff) << 8) | ((hs >> 1) & 0xff));
-                ((UWORD *)e)[4] = (UWORD)(((ve & 0xff) << 8) | (((vs >> 8) & 1) << 2) | (((ve >> 8) & 1) << 1) | (hs & 1));
-                if (o) { ((UWORD *)o)[0] = ((UWORD *)e)[0]; ((UWORD *)o)[4] = (UWORD)(((UWORD *)e)[4] | 0x80); }
+                PUTW(e, ((vs & 0xff) << 8) | ((hs >> 1) & 0xff));
+                PUTW(e + 8, ((ve & 0xff) << 8) | (((vs >> 8) & 1) << 2) | (((ve >> 8) & 1) << 1) | (hs & 1));
+                if (o) { PUTW(o, GETW(e)); PUTW(o + 8, GETW(e + 8) | 0x80); }
             }
             memset(e + 16, 0, n);
             if (o) memset(o + 16, 0, n);
@@ -366,3 +375,4 @@ void video_frame(void)
     if (ppu_mask & 0x10) build_sprites();
     else for (i = 0; i < 7; i++) disp_sprite_off((UWORD)i);
 }
+

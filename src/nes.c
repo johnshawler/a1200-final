@@ -142,9 +142,9 @@ static void mmc1(uint16_t a, uint8_t v)
         if (done) {
             uint8_t val = mmc_shift;
             switch ((a >> 13) & 3) {
-            case 0: if ((val ^ mmc_ctrl) & 0x13) nes_redraw_all = 1; mmc_ctrl = val; break;
-            case 1: if (val != mmc_chr0) nes_redraw_all = 1; mmc_chr0 = val; break;
-            case 2: if (val != mmc_chr1) nes_redraw_all = 1; mmc_chr1 = val; break;
+            case 0: if ((val ^ mmc_ctrl) & 0x03) nes_redraw_all = 1; mmc_ctrl = val; break;   /* mirroring */
+            case 1: mmc_chr0 = val; break;          /* tile sets: the display compares what it drew with */
+            case 2: mmc_chr1 = val; break;
             default: mmc_prg = val; break;
             }
             map_prg();
@@ -157,8 +157,7 @@ void nes_write_slow(uint16_t a, uint8_t v)
 {
     if (a < 0x4000) {
         switch (a & 7) {
-        case 0: if ((v ^ ppu_ctrl) & 0x18) nes_redraw_all = 1;      /* pattern table choice changed */
-                ppu_ctrl = v; ppu_t = (uint16_t)((ppu_t & 0xf3ff) | ((v & 3) << 10)); break;
+        case 0: ppu_ctrl = v; ppu_t = (uint16_t)((ppu_t & 0xf3ff) | ((v & 3) << 10)); break;
         case 1: ppu_mask = v; break;
         case 3: ppu_oamaddr = v; break;
         case 4: nes_oam[ppu_oamaddr++] = v; break;
