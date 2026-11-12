@@ -30,7 +30,8 @@ resets the per-game files and keeps everything reusable. The Claude skill in `sk
 3. **Measure the load before anything else**: `WAITPCS=<wait loop addresses> nesref -s` gives 6502 instructions
    per frame outside wait loops. Do it per scene. Then the verdict (section 6). Write it in the feasibility note.
 4. Trace (`nesref -c`) attract, self-play and random input; `tools/recomp.py --game <game>` → C and 68k.
-5. `tools/nesref/verify.c` against the host test, tick by tick (NES RAM). Then the Amiga checksum against the
+5. `tools/nesref/verify.c` against the host test, tick by tick (NES RAM), and the host test against the reference
+   NES itself (`nesref -r`, section 3): the first checks the translation, the second the frame model. Then the Amiga checksum against the
    host, tick by tick (`tools/debug_run.sh` + per-tick trace). Only then display and speed.
 
 ## 3. NES behaviour the frame model must get right
@@ -43,9 +44,14 @@ resets the per-game files and keeps everything reusable. The Claude skill in `sk
   changes after it belongs to the lower part of the picture.
 - **Stack tricks** (jump tables after JSR, `PLA PLA RTS`, pushed-address RTS): the 6502 stack stays in RAM,
   RTS compares with the caller's expectation and unwinds. Jump-table dispatchers go in `NORETURN`.
-- **Lag**: check with the reference whether the original finishes its logic within each frame in the busy
-  scenes. If it doesn't, game time on the NES is slower there and the frame model would need cycle budgets
-  (not needed for Little League Baseball).
+- **Lag is part of the game**: when the main thread overruns a frame, the NES takes the NMI in the middle of
+  it. The translation counts 6502 cycles and ends the tick at the next check point once 29,781 have gone by
+  (`tools/recomp.py`, LEARNINGS.md 2b). It is on by default. Every hand-written routine needs an `HLE_CYCLES` entry
+  (measure it: `HLEPROF=addr,... tools/nesref`). Check it on day one: `nesref -s` prints where each NMI
+  interrupted the main thread (`nmi_from`), so frames that are not in a wait loop are lag frames.
+- **Compare with the reference NES, not only with the interpreter**: `nesref -r ram.bin` against
+  `host_test N -r` (offset 2 ticks) shows whether the frame model is the real game. `verify.c` only proves the
+  translation agrees with the model.
 - The checksum covers all 2 KB of RAM including the stack page: anything that changes RAM must be exact.
 
 ## 4. Idioms worth looking for first (the cheap big wins)
@@ -103,7 +109,7 @@ Say the verdict in the report from the start; name the upgrade.
 ## 8. Not done yet (do it when a game needs it)
 
 Other mappers (UxROM, CNROM, MMC3 with its scanline IRQ); scroll changes at a split; DMC samples; the 8
-sprites per line limit; lag (cycle budgets); a 68030 bench.
+sprites per line limit; exact cycle counts for data-dependent hand-written routines; a 68030 bench.
 
 ## 9. Lessons log (append one entry per port, newest last)
 
@@ -130,3 +136,10 @@ sections above if a lesson is general.
     sweep restarts on a $4001/$4005 write, and overflow mutes even when the sweep is disabled.
   - The triangle waveform table was wrong (an octave-heavy shape): check waveforms against a reference WAV.
   - Compare against the real thing with the *same input*: comparing runs with different input wasted time.
+  - **Fielding was jumpy and a throw missed the baseman**: the game lags in field play (main thread longer
+    than a frame) and the frame model let it finish every frame. Now 6502 cycles are counted and the NMI comes
+    where it does on the NES (section 3). The old model left the real game at tick 102 of the self-playing game;
+    the new one matches the reference NES byte for byte through tick 2,190, and it is faster (37.2 → 40.5 fps).
+  - **Extra sound during the bat toss**: the game turns a channel off and on again within one frame
+    (`$4015 = $0D, $0F`). That stops the length counter on the NES; the sound code only looked at the last value.
+    Now `apu_kill` records every stop. Check sound against register writes in order, not end-of-frame state.

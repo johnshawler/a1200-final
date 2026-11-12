@@ -64,6 +64,7 @@ extern uint8_t  split_seen;                     /* a split happened in the NMI t
 /* APU: the register file, and which channels were (re)started this frame. The Amiga side plays it. */
 extern uint8_t apu_reg[0x18];
 extern uint8_t apu_trig;
+extern uint8_t apu_kill;                         /* bit n: $4015 stopped channel n after its last length load */
 extern uint32_t apu_written;            /* bit n: $40nn written since last looked (sweep, period writes) */
 
 /* Controller: buttons in NES order (bit 0 A, 1 B, 2 Select, 3 Start, 4 Up, 5 Down, 6 Left, 7 Right) */
@@ -75,5 +76,14 @@ uint16_t nes_reset_entry(void);
 void     nes_wait(int kind, uint16_t pc);       /* logic.c: the game waits for the next frame here */
 #define WAIT_RAM 0
 #define WAIT_VBL 1
+#define WAIT_LAG 2                              /* a check point found a frame's worth of 6502 cycles used up */
+/* The frame model's 6502 time: cycles since the last NMI began (tools/recomp.py counts them). An NTSC NES
+   frame is 29780.67 CPU cycles; while a hand-written routine runs the count is parked at NES_CYC_OFF. */
+#ifndef NES_FRAME_CYC
+#define NES_FRAME_CYC 29781
+#endif
+#define NES_CYC_OFF   (-0x40000000)
+extern int32_t  nes_cyc;
+extern uint8_t  nes_in_nmi;
 
 #endif

@@ -2,9 +2,12 @@
  * WAV file (22050 Hz stereo, Paula's channels 0+3 left, 1+2 right), to check the NES sound without the emulator.
  *   cc -Itools/hostinc -Ikit -Isrc -DPAULA='(&paula)' tools/shost.c src/sound.c src/logic.c src/nes.c src/run_c.c src/coro_host.c src/gen_*.c
  *   shost N out.wav       (N ticks of the bench input; one drawn frame per tick 6 in 5, as on a full-speed Amiga)
+ *   INPUT=script          play a tools/nesref input script instead ("first last BUTTONS" lines)
+ *   STATS=1 / STATS=2     print the four channels once a second / every frame
  */
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 #include "exec/types.h"
 #include "hardware/custom.h"
 #include "nes.h"
@@ -15,6 +18,30 @@ struct Custom paula;
 uint8_t nes_prg_data[0x20000], nes_chr_data[0x20000];
 void *sys_alloc(ULONG size, ULONG f) { (void)f; return calloc(1, size); }
 
+static struct { unsigned a, b; unsigned short bits; } script[4096]; static int nscript = -1;
+static unsigned short input_at(unsigned t)
+{
+    unsigned short r = 0; int i;
+    if (nscript < 0) {
+        FILE *f = getenv("INPUT") ? fopen(getenv("INPUT"), "r") : 0; char l[256], *p, *tok; unsigned a, b;
+        nscript = f ? 0 : -2;
+        while (f && fgets(l, sizeof l, f) && nscript < 4096) {
+            if (sscanf(l, "%u %u", &a, &b) != 2) continue;
+            p = l; strtol(p, &p, 10); strtol(p, &p, 10);
+            script[nscript].a = a; script[nscript].b = b; script[nscript].bits = 0;
+            for (tok = strtok(p, " \t\r\n+"); tok; tok = strtok(0, " \t\r\n+"))
+                script[nscript].bits |= !strcmp(tok, "A") ? IN_A : !strcmp(tok, "B") ? IN_B : !strcmp(tok, "START") ? IN_START :
+                    !strcmp(tok, "SELECT") ? IN_SELECT : !strcmp(tok, "UP") ? IN_UP : !strcmp(tok, "DOWN") ? IN_DOWN :
+                    !strcmp(tok, "LEFT") ? IN_LEFT : !strcmp(tok, "RIGHT") ? IN_RIGHT : 0;
+            nscript++;
+        }
+        if (f) fclose(f);
+    }
+    if (nscript == -2) return game_bench_input(t);
+    for (i = 0; i < nscript; i++) if (t >= script[i].a && t <= script[i].b) r |= script[i].bits;
+    return r;
+}
+
 int main(int argc, char **argv)
 {
     unsigned n = atoi(argv[1]), t, frame = 0; FILE *g, *w; double pos[4] = {0}; long samples = 0; int c, i;
@@ -24,9 +51,9 @@ int main(int argc, char **argv)
     game_init(); sound_load(); sound_start();
     for (t = 0; t < n; ) {
         int k = (frame % 5 == 4) ? 2 : 1;                       /* 60 ticks in 50 frames */
-        while (k-- && t < n) { game_tick(game_bench_input(t)); t++; }
+        while (k-- && t < n) { game_tick(input_at(t)); t++; }
         sound_frame(); frame++;
-        if (getenv("STATS") && frame % 50 == 0) printf("%3us vol %2d %2d %2d %2d per %4d %4d %4d %4d\n", frame / 50, paula.aud[0].ac_vol, paula.aud[1].ac_vol, paula.aud[2].ac_vol, paula.aud[3].ac_vol, paula.aud[0].ac_per, paula.aud[1].ac_per, paula.aud[2].ac_per, paula.aud[3].ac_per);
+        if (getenv("STATS") && (frame % 50 == 0 || atoi(getenv("STATS")) == 2)) printf("t%5u %3us vol %2d %2d %2d %2d per %4d %4d %4d %4d  apu %02x\n", t, frame / 50, paula.aud[0].ac_vol, paula.aud[1].ac_vol, paula.aud[2].ac_vol, paula.aud[3].ac_vol, paula.aud[0].ac_per, paula.aud[1].ac_per, paula.aud[2].ac_per, paula.aud[3].ac_per, apu_reg[0x15]);
         for (i = 0; i < 441; i++) {                             /* 1/50 s at 22050 Hz */
             int lr[2] = {0, 0};
             for (c = 0; c < 4; c++) {

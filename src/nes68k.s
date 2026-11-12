@@ -10,6 +10,7 @@
         xref    _cpu_a,_cpu_s,_cpu_x,_cpu_y,_cpu_c,_cpu_z,_cpu_n,_cpu_v,_cpu_i,_cpu_d
 ;       _cpu_x,_cpu_y,_cpu_s,_cpu_c,_cpu_z,_cpu_n,_cpu_v,_cpu_i,_cpu_d
         xref    _nes_ram,_nes_prg_lo,_nes_prg_hi,_nes_prg_data,_ppu_v,_ppu_ctrl,_nes_vram,_nes_dirty,_nes_dirty_flag,_nes_ndirty,_nes_redraw_all,_nes_bank,_mmc_shift,_mmc_chr0,_mmc_chr1,_mmc_ctrl,_mmc_prg,_pad_shift,_pad_strobe,_nes_pad
+        xref    _nes_cyc
         xref    _nes_io_read,_nes_read_s0,_nes_write_slow,_nes_wait,_nes_fatal,_nes_mmc_prg,_nes_mmc_ctrl
 
 ; ---- moving the 6502 state between the globals and the registers
@@ -27,6 +28,7 @@ _load_state:
         move.l  _nes_prg_lo,a3
         lea     _nes_prg_data+$1c000,a4
         move.b  _cpu_v,d5
+        movea.l _nes_cyc,a6             ; the 6502 cycle count (tools/recomp.py) lives in a6
         moveq   #0,d4
         tst.b   _cpu_c
         beq.s   .1
@@ -42,6 +44,7 @@ _load_state:
 
 _store_state:
         move.w  ccr,d6
+        move.l  a6,_nes_cyc
         move.b  d0,_cpu_a
         move.b  d1,_cpu_x
         move.b  d2,_cpu_y
@@ -169,6 +172,9 @@ _wait_ram:
         bra.s   _wait
 _wait_vbl:
         pea     1.w
+        bra.s   _wait
+_wait_lag:                              ; a check point found the frame's cycles used up: the NMI comes here
+        pea     2.w
 _wait:  bsr     _store_state
         move.l  (sp)+,d3
         move.l  a1,d4
@@ -204,10 +210,12 @@ _io_rd:                                 ; a0 = address -> d4
         movem.l (sp)+,d0-d1/a0-a1
         move.w  (sp)+,ccr
         rts
-_rd_s0:                                 ; $2002 read in a sprite 0 wait -> d4
+_rd_s0:                                 ; $2002 read in a sprite 0 wait -> d4 (it may move the cycle count on)
         move.w  ccr,-(sp)
         movem.l d0-d1/a0-a1,-(sp)
+        move.l  a6,_nes_cyc
         jsr     _nes_read_s0
+        movea.l _nes_cyc,a6
         move.b  d0,d4
         movem.l (sp)+,d0-d1/a0-a1
         move.w  (sp)+,ccr

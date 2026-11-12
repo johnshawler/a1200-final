@@ -42,7 +42,8 @@ Rules that come with it:
 
 ## Part B: backlog for this port, by expected gain per effort
 
-Status after the fast-RAM work: 4 MB fast RAM 44.6 fps, stock 37.2 fps, checksum equal. Field play on 4 MB:
+Status after the lag model (LEARNINGS.md 2b): 4 MB fast RAM 46.0 fps, stock 40.5 fps, checksum equal (was 44.6 and
+37.2 before the game's own lag was reproduced). Earlier status after the fast-RAM work: Field play on 4 MB:
 logic ~29k colour clocks per tick (×1.2 per frame), display ~25–35k per frame, 71k available, 57k at 80%.
 
 | Priority | Item | Expected gain | Effort | How to know it worked |

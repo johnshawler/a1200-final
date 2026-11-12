@@ -6,7 +6,11 @@
  *     -d f1,f2,...      dump these frames as frame_NNNNN.ppm
  *     -o dir            where dumps go (default .)
  *     -c cov.txt        write code coverage: "bank pc" of every executed instruction + indirect targets
- *     -s                print per-frame stats (instructions, ppu writes)
+ *     -s                print per-frame stats (where the NMI interrupted the main thread, instructions, ppu writes)
+ *     -r ram.bin        write NES RAM as each NMI begins (compare with "host_test N -r" at offset -2)
+ *     -p prof.txt       instruction profile
+ *     HLEPROF=c378,...  print how many cycles each call of these subroutines takes (for HLE_CYCLES in tools/games)
+ *   The buttons of frame f+1 apply from frame f's vertical blank on, as in the port's frame model.
  *     -t                trace every instruction (huge)
  */
 #include <stdio.h>
@@ -171,8 +175,17 @@ static const uint8_t cyc[256] = {
 2,6,2,8,3,3,5,5,2,2,2,2,4,4,6,6,2,5,2,8,4,4,6,6,2,4,2,7,4,4,7,7,
 2,6,2,8,3,3,5,5,2,2,2,2,4,4,6,6,2,5,2,8,4,4,6,6,2,4,2,7,4,4,7,7};
 
+/* HLEPROF=c378,e2de,...: how many cycles each call of these subroutines takes (NMI time left out) */
+static int nhp = -1; static uint16_t hp_addr[32]; static long long hp_sum[32], hp_n[32], hp_min[32], hp_max[32];
+static struct { int k; uint8_t s; long long c0, nmi0; } hp_act[64]; static int nact;
+static long long nmi_cyc, nmi_t0; static int in_nmi_ref;
+static void hp_init(void) { char *e = getenv("HLEPROF"); nhp = 0; while (e && *e && nhp < 32) { hp_addr[nhp] = strtol(e, &e, 16); hp_min[nhp] = 1LL << 40; nhp++; if (*e) e++; } }
+static FILE *ramf;                          /* -r file: NES RAM as the NMI begins, every frame */
+static uint16_t nmi_from;                    /* where the last NMI interrupted the main thread */
 static void irq_nmi(uint16_t vec)
 {
+    nmi_from = PC; nmi_t0 = cycles; in_nmi_ref = 1;
+    if (ramf) fwrite(ram, 1, 0x800, ramf);
     push(PC >> 8); push(PC & 0xff); push((P & ~FB) | 0x20); P |= FI;
     PC = rd(vec) | (rd(vec + 1) << 8); cycles += 7;
     cov_mark(PC, 4);
@@ -260,12 +273,15 @@ static void step(void)
     } break;
     case 0x4c: PC = a; if (PC >= 0x8000 && PC < 0xc000 && (pc0 >= 0xc000 || pc0 < 0x8000)) flow('X', pc0, PC); break;
     case 0x6c: PC = rd(a) | (rd((a & 0xff00) | ((a + 1) & 0xff)) << 8); flow('I', pc0, PC); break;
-    case 0x20: push((PC - 1) >> 8); push((PC - 1) & 0xff); if (nshadow < 256) shadow[nshadow++] = PC; PC = a; if (PC >= 0x8000 && PC < 0xc000 && (pc0 >= 0xc000 || pc0 < 0x8000)) flow('X', pc0, PC); break;
+    case 0x20: { int k; if (nhp < 0) hp_init(); for (k = 0; k < nhp; k++) if (hp_addr[k] == a && nact < 64) { hp_act[nact].k = k; hp_act[nact].s = S; hp_act[nact].c0 = cycles - 6; hp_act[nact].nmi0 = nmi_cyc; nact++; } }
+        push((PC - 1) >> 8); push((PC - 1) & 0xff); if (nshadow < 256) shadow[nshadow++] = PC; PC = a; if (PC >= 0x8000 && PC < 0xc000 && (pc0 >= 0xc000 || pc0 < 0x8000)) flow('X', pc0, PC); break;
     case 0x60: PC = (pop() | (pop() << 8)) + 1;
         if (nshadow && shadow[nshadow - 1] == PC) nshadow--;
         else { int k = nshadow; while (k && shadow[k - 1] != PC) k--; if (k) nshadow = k - 1; flow('U', pc0, PC); }
+        while (nact && hp_act[nact - 1].s == S) { int k = hp_act[--nact].k; long long d = cycles - hp_act[nact].c0 - (nmi_cyc - hp_act[nact].nmi0);
+            hp_sum[k] += d; hp_n[k]++; if (d < hp_min[k]) hp_min[k] = d; if (d > hp_max[k]) hp_max[k] = d; }
         break;
-    case 0x40: P = (pop() & ~FB) | 0x20; PC = pop() | (pop() << 8); break;
+    case 0x40: P = (pop() & ~FB) | 0x20; PC = pop() | (pop() << 8); if (in_nmi_ref) { nmi_cyc += cycles - nmi_t0; in_nmi_ref = 0; } break;
     case 0x00: PC++; push(PC >> 8); push(PC & 0xff); push(P | FB | 0x20); P |= FI; PC = rd(0xfffe) | (rd(0xffff) << 8); break;
     case 0x48: push(A); break; case 0x68: A = pop(); setnz(A); break;
     case 0x08: push(P | FB | 0x20); break; case 0x28: P = (pop() & ~FB) | 0x20; break;
@@ -339,7 +355,10 @@ static void dump(const char *dir, int f)
     fclose(o);
 }
 
-static void run_cycles(long long n) { long long end = cycles + n; while (cycles < end) step(); }
+/* PPU time in dots (3 per CPU cycle, 341 per line, 262 lines): the CPU runs up to an absolute target, so the
+   overshoot of one instruction does not add up over a frame (a frame is 29780.67 CPU cycles, as on the NES) */
+static long long dots;
+static void run_dots(long n) { dots += n; while (cycles * 3 < dots) step(); }
 
 typedef struct { int a, b; uint8_t bits; } In;
 static In ins[4096]; static int nin;
@@ -366,38 +385,42 @@ int main(int argc, char **argv)
         else if (!strcmp(argv[i], "-s")) stats = 1;
         else if (!strcmp(argv[i], "-p")) { proff = fopen(argv[++i], "w"); prof = calloc(16 * 0x10000, sizeof *prof); }
         else if (!strcmp(argv[i], "-t")) trace = 1;
+        else if (!strcmp(argv[i], "-r")) ramf = fopen(argv[++i], "wb");
     }
     PC = rd(0xfffc) | (rd(0xfffd) << 8);
     if (cov) cov_mark(PC, 4);
     for (fr = 0; fr < frames; fr++) {
         int y; char key[16];
-        pad = 0; for (i = 0; i < nin; i++) if (fr >= ins[i].a && fr <= ins[i].b) pad |= ins[i].bits;
         frame_instr = frame_ppuw = frame_2002r = 0;
         if (trace) printf("---- frame %d\n", fr);
         /* pre-render line: copy vertical bits */
         ppustatus &= ~0x60;
         for (y = 0; y < 240; y++) {
             scanline = y;
-            run_cycles(85);
+            run_dots(256);
             if (ppumask & 0x18) { if (y == 0) v = t; render_line(y);
                 /* increment y */
                 if ((v & 0x7000) != 0x7000) v += 0x1000; else { int cy; v &= ~0x7000; cy = (v & 0x03e0) >> 5;
                     if (cy == 29) { cy = 0; v ^= 0x0800; } else if (cy == 31) cy = 0; else cy++; v = (v & ~0x03e0) | (cy << 5); }
                 v = (v & ~0x041f) | (t & 0x041f); }
             else memset(fb[y], pal[0], 256);
-            run_cycles(29);
+            run_dots(85);
         }
-        scanline = 240; run_cycles(114);
+        scanline = 240; run_dots(341);
+        /* the buttons of frame fr+1 from the vertical blank on (the port's frame model: a tick is NMI + main thread) */
+        pad = 0; for (i = 0; i < nin; i++) if (fr + 1 >= ins[i].a && fr + 1 <= ins[i].b) pad |= ins[i].bits;
         ppustatus |= 0x80; if (ppuctrl & 0x80) nmi_pending = 2;
-        scanline = 241; run_cycles(114 * 20);
+        scanline = 241; run_dots(341 * 20);
         ppustatus &= 0x1f;
-        scanline = -1; run_cycles(114);
-        if (stats) printf("frame %d instr %ld ppuw %ld r2002 %ld ctrl %02x mask %02x mmc %02x/%02x/%02x/%02x\n", fr, frame_instr, frame_ppuw, frame_2002r, ppuctrl, ppumask, m_ctrl, m_chr0, m_chr1, m_prg);
+        scanline = -1; run_dots(341);
+        if (stats) printf("frame %d nmi_from %04x instr %ld ppuw %ld r2002 %ld ctrl %02x mask %02x mmc %02x/%02x/%02x/%02x\n", fr, nmi_from, frame_instr, frame_ppuw, frame_2002r, ppuctrl, ppumask, m_ctrl, m_chr0, m_chr1, m_prg);
         snprintf(key, sizeof key, ",%d,", fr);
         if (strstr(dumps, key)) dump(dir, fr);
     }
+    if (ramf) fclose(ramf);
     if (covf) { for (i = 0; i < prg_banks * 0x4000; i++) if (cov[i] & 1) fprintf(covf, "E %d %04x\n", i / 0x4000, (i / 0x4000 == prg_banks - 1 ? 0xc000 : 0x8000) + (i & 0x3fff)); fclose(covf); }
     if (proff) { for (i = 0; i < 16 * 0x10000; i++) if (prof[i]) fprintf(proff, "%u %x %04x\n", prof[i], i >> 16, i & 0xffff); fclose(proff); }
+    for (i = 0; i < nhp; i++) if (hp_n[i]) fprintf(stderr, "HLEPROF %04x calls %lld avg %lld min %lld max %lld\n", hp_addr[i], hp_n[i], hp_sum[i] / hp_n[i], hp_min[i], hp_max[i]);
     fprintf(stderr, "instructions %lld\n", instr_total);
     return 0;
 }

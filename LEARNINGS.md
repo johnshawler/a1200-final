@@ -39,6 +39,30 @@ part for other NES ports is in `PLAYBOOK-NES.md`. The brief's own rules are in `
   registers, all four flags, RAM, and the return addresses their subroutine calls leave on the stack page (the
   checksum covers all 2 KB of RAM). Give each a guarded fall-back to the translation (`.orig`).
 
+### 2b. The frame model must reproduce the original's lag (found by the first player)
+
+- "One tick = NMI + main thread until it waits" is wrong for a game whose main thread does not finish within a
+  frame. The NES then takes the NMI in the middle of the game logic and the main loop runs less often than once
+  a frame. Little League Baseball does this in field play (the reference NES showed 748 such frames in 6,000 of
+  the self-playing game), and the old model ran field play at a different pace from the real game: fielders and
+  ball drifted against the NMI-driven parts. The player saw jumpy pictures and a throw that missed the baseman.
+- Fix: count 6502 cycles in the translation (`nes_cyc`, since the last NMI; static per instruction, +1 for a taken
+  branch, +513 for sprite DMA, the sprite 0 wait jumps to the hit line). At **check points** (function entries,
+  loop heads, after every JSR) a frame's worth of cycles (29,781) ends the tick there and the next tick starts with
+  the NMI at that point. On the 68k `a6` holds the count; each block adds its cost with one `lea` (no flags), a
+  check is `cmpa.w` + `bge` (leaves X, the 6502 carry). Hand-written routines cost a fixed `HLE_CYCLES`
+  (measured with `HLEPROF=` in `tools/nesref`); the translation inside them is not counted, in both back ends.
+- Proof: `tools/nesref -r` writes NES RAM at each NMI; the host test's RAM after tick t equals it at frame t-2.
+  The old model matched the reference only until tick 102 of the self-playing game. The new one matches exactly
+  through tick 2,190 (with check points only at entries and loop heads: 1,803; checks at every block bought
+  nothing more), and drifts back into step after the differences. With exact cycles for the hand-written routines
+  it matched through 2,208. The cost on the Amiga: none visible; the stock bench went from 37.2 to 40.5 fps, because
+  a lagging NES does less game work per frame, and the port now does too.
+- Check points must be global: an address that is a loop head in one translated function is plain code inside an
+  overlapping one. The interpreter (`verify.c`) caught this.
+- The reference itself needed fixing first: it added up each line's cycle overshoot (frames were too long) and
+  changed the buttons at line 0 instead of at the vertical blank.
+
 ## 3. Why C was too slow and assembly was not enough
 
 - First C back end: correct, but every 6502 subroutine call copied all registers and flags through globals.

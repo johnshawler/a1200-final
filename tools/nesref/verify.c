@@ -1,6 +1,7 @@
 /* verify.c - host only: checks the translation. Interprets the original 6502 code instruction by instruction,
- * with the same frame model as src/logic.c (a frame ends at a wait loop listed in src/gen_waits.txt, the NMI
- * runs at the start of the next one) and the same machine (src/nes.c). Writes NES RAM after every tick, like
+ * with the same frame model as src/logic.c (a frame ends at a wait loop listed in src/gen_waits.txt, or at a
+ * check point of src/gen_checks.txt once a frame's worth of 6502 cycles is used up; the NMI runs at the start
+ * of the next one) and the same machine (src/nes.c). Writes NES RAM after every tick, like
  * "host_test N -r file", so the two files can be compared byte for byte.
  *
  *   cc -O2 -Isrc tools/nesref/verify.c src/nes.c -o verify && ./verify N ram_interp.bin
@@ -18,6 +19,18 @@ uint16_t nes_reset_entry(void) { return 0; }
 static uint8_t A, X, Y, S = 0xfd, P = 0x24; static uint16_t PC, pc0;
 static struct { int bank; uint16_t br, loop; int kind; } waits[64]; static int nwaits;
 static int s0at[0x10000];
+static uint8_t is_check[8][0x10000];            /* src/gen_checks.txt: C lines */
+static int hle_k[8][0x10000];                   /* H lines: hand-written routines and their cost, +1 */
+static int in_hle; static uint8_t hle_mark; static int32_t hle_save;
+static const uint8_t cyc[256] = {
+7,6,2,8,3,3,5,5,3,2,2,2,4,4,6,6,2,5,2,8,4,4,6,6,2,4,2,7,4,4,7,7,
+6,6,2,8,3,3,5,5,4,2,2,2,4,4,6,6,2,5,2,8,4,4,6,6,2,4,2,7,4,4,7,7,
+6,6,2,8,3,3,5,5,3,2,2,2,3,4,6,6,2,5,2,8,4,4,6,6,2,4,2,7,4,4,7,7,
+6,6,2,8,3,3,5,5,4,2,2,2,5,4,6,6,2,5,2,8,4,4,6,6,2,4,2,7,4,4,7,7,
+2,6,2,6,3,3,3,3,2,2,2,2,4,4,4,4,2,6,2,6,4,4,4,4,2,5,2,5,5,5,5,5,
+2,6,2,6,3,3,3,3,2,2,2,2,4,4,4,4,2,5,2,5,4,4,4,4,2,4,2,4,4,4,4,4,
+2,6,2,8,3,3,5,5,2,2,2,2,4,4,6,6,2,5,2,8,4,4,6,6,2,4,2,7,4,4,7,7,
+2,6,2,8,3,3,5,5,2,2,2,2,4,4,6,6,2,5,2,8,4,4,6,6,2,4,2,7,4,4,7,7};
 
 static int bank_of(uint16_t a) { return a >= 0xc000 ? 7 : nes_bank; }
 static uint8_t rd(uint16_t a)
@@ -43,7 +56,11 @@ static int step(void)
 {
     uint8_t op, m, lo, hi; uint16_t a = 0; int mode = 0, k;
     pc0 = PC;
+    {   int h = hle_k[bank_of(PC)][PC];                 /* a hand-written routine on the Amiga: a fixed cost */
+        if (h && !in_hle) { nes_cyc += h - 1; hle_save = nes_cyc; nes_cyc = NES_CYC_OFF; in_hle = 1; hle_mark = (uint8_t)(S + 2); } }
     op = rd(PC++);
+    nes_cyc += cyc[op];
+    if ((op == 0x8d || op == 0x8e || op == 0x8c) && rd(PC) == 0x14 && rd((uint16_t)(PC + 1)) == 0x40) nes_cyc += 513;
     switch (op & 0x1f) {
     case 0x00: case 0x02: mode = (op == 0x20) ? 4 : (op & 0x80) ? 1 : 0; break;
     case 0x09: mode = 1; break;
@@ -103,14 +120,14 @@ static int step(void)
         int8_t off = (int8_t)rd(PC++); int f;
         switch (op >> 6) { case 0: f = P & FN; break; case 1: f = P & FV; break; case 2: f = P & FC; break; default: f = P & FZ; }
         if (((op >> 5) & 1) ? f : !f) {
-            PC = (uint16_t)(PC + off);
+            PC = (uint16_t)(PC + off); nes_cyc++;
             for (k = 0; k < nwaits; k++) if (waits[k].br == pc0 && waits[k].bank == bank_of(pc0)) return 1 + waits[k].kind;
         }
     } break;
     case 0x4c: PC = a; break;
     case 0x6c: PC = (uint16_t)(rd(a) | (rd((uint16_t)((a & 0xff00) | ((a + 1) & 0xff))) << 8)); break;
     case 0x20: push((uint8_t)((PC - 1) >> 8)); push((uint8_t)(PC - 1)); PC = a; break;
-    case 0x60: PC = (uint16_t)((pop() | (pop() << 8)) + 1); break;
+    case 0x60: PC = (uint16_t)((pop() | (pop() << 8)) + 1); if (in_hle && S == hle_mark) { in_hle = 0; nes_cyc = hle_save; } break;
     case 0x40: P = (uint8_t)((pop() & ~0x10) | 0x20); PC = (uint16_t)(pop() | (pop() << 8)); break;
     case 0x48: push(A); break; case 0x68: A = pop(); setnz(A); break;
     case 0x08: push(P | 0x30); break; case 0x28: P = (uint8_t)((pop() & ~0x10) | 0x20); break;
@@ -194,12 +211,21 @@ int main(int argc, char **argv)
         waits[nwaits].kind = !strcmp(k, "VBL"); nwaits++;
     }
     if (f) fclose(f);
+    f = fopen("src/gen_checks.txt", "r");
+    while (f && fgets(line, sizeof line, f)) {
+        int b, k; unsigned pc; char c;
+        if (sscanf(line, "%c %d %x %d", &c, &b, &pc, &k) < 3) continue;
+        if (c == 'C') is_check[b][pc] = 1; else if (c == 'H') hle_k[b][pc] = k + 1;
+    }
+    if (f) fclose(f);
     nes_init(nes_prg_data, nes_chr_data);
     PC = (uint16_t)(nes_rd(0xfffc) | nes_rd(0xfffd) << 8);
     for (t = 0; t < n; t++) {
         nes_pad = pad_of(input_at(t));
         if (kind >= 0) {                                /* start of a frame after a wait: NMI, then the vblank flag */
+            if (kind == 2) nes_cyc -= NES_FRAME_CYC; else nes_cyc = 0;
             if (ppu_ctrl & 0x80) {
+                nes_cyc += 7;
                 uint16_t back = PC; uint8_t s0 = S;
                 push((uint8_t)(PC >> 8)); push((uint8_t)PC); push((uint8_t)((P & ~0x10) | 0x20)); P |= FI;
                 PC = (uint16_t)(nes_rd(0xfffa) | nes_rd(0xfffb) << 8);
@@ -211,7 +237,11 @@ int main(int argc, char **argv)
             }
             if (kind == 1) ppu_vbl = 1;
         }
-        for (;;) { int r = step(); if (r) { kind = r - 1; break; } }
+        for (;;) {
+            int r;
+            if (nes_cyc >= NES_FRAME_CYC && is_check[bank_of(PC)][PC]) { if (getenv("LAGLOG")) printf("LAG tick %u kind 2 pc %04x cyc %d\n", t + 1, PC, nes_cyc); kind = 2; break; }   /* lag: the NMI comes here */
+            r = step(); if (r) { kind = r - 1; break; }
+        }
         fwrite(nes_ram, 1, sizeof nes_ram, log);
     }
     fclose(log);

@@ -217,3 +217,9 @@ HLE[(7, 0xe2de)] = '''
     move.b (_inctab,d2.w),d2
 .rts'''
 HLE_FALLBACK = {(7, 0xe2de), (7, 0xc14e), (7, 0xc14c), (7, 0xc150), (7, 0xc102), (7, 0xc11c), (7, 0xc134)}
+
+# What a call of each hand-written routine costs in the frame model's 6502 cycle budget (tools/recomp.py): the
+# average the original takes on the reference NES (HLEPROF=... tools/nesref, watch game and a 1P game), minus
+# the 6 of the JSR. The bank switches always take the same time; $C378 takes 355-660 and $E2DE 33-151.
+HLE_CYCLES = {(7, 0xcebd): 1424, (7, 0xc378): 419, (7, 0xe2de): 114, (7, 0xc14e): 47, (7, 0xc14c): 50,
+              (7, 0xc150): 44, (7, 0xc102): 47, (7, 0xc11c): 44, (7, 0xc134): 44}

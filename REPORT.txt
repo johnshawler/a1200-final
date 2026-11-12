@@ -9,18 +9,20 @@ Display:               planes=4 scroll=1 fetch=0 buffers=1 sprites used=7 (3 att
 Busiest moment:        fielding: camera scrolling in x and y, ~40 NES sprites, NES CPU 95-100% busy.
                        Not a Step 2 sum: the logic alone is ~85% of a frame per NES frame there (measured, debug build,
                        p90 60,695 colour clocks a tick), and 6 NES frames fall in 5 Amiga frames.
-Cut from the original: sprite-behind-background priority (sprites always in front); the 32-pixel side borders
+Cut from the original: the 32-pixel side borders
                        show the backdrop colour; very high NES notes are clamped to Paula's fastest rate; sprite
                        clusters that find no free hardware sprite would be dropped (none dropped in the 3000-tick host run).
                        Sound is in: the NES APU (2 pulse, triangle, noise; the game uses no DMC) modelled on Paula.
-Stock A1200 bench:     frames=1892 late=647 worst_cck=1097057 avg_cck=46728 budget_cck=71051 worst_pct=1544 avg_pct=65 display_hz=50 shown_fps=37.2
-                       ticks=3000 checksum=b5a58399  (FS-UAE 3.1.66, tools/bench.sh, AROS ROM)
-With 4 MB fast RAM:    frames=2234 late=267 worst_cck=499838 avg_cck=28236 budget_cck=71051 worst_pct=703 avg_pct=39 display_hz=50 shown_fps=44.6
-                       ticks=3000 checksum=b5a58399
-With 8 MB fast RAM:    frames=2234 late=267 worst_cck=499838 avg_cck=28236 budget_cck=71051 worst_pct=703 avg_pct=39 display_hz=50 shown_fps=44.6
-                       ticks=3000 checksum=b5a58399  (tools/bench.sh dist llb 3000 - --fast_memory=8192)
-Host checksum:         b5a58399 after 3000 ticks  equal
-Frame rate claim:      37.2 fps shown on the stock A1200, 44.6 fps with 4 or 8 MB fast RAM (the same), logic at 60
+Stock A1200 bench:     frames=2042 late=476 worst_cck=898827 avg_cck=41002 budget_cck=71051 worst_pct=1265 avg_pct=57 display_hz=50 shown_fps=40.5
+                       ticks=3000 checksum=9ff827ce  (FS-UAE 3.1.66, tools/bench.sh, AROS ROM)
+With 4 MB fast RAM:    frames=2301 late=200 worst_cck=579146 avg_cck=25456 budget_cck=71051 worst_pct=815 avg_pct=35 display_hz=50 shown_fps=46.0
+                       ticks=3000 checksum=9ff827ce
+With 8 MB fast RAM:    frames=2301 late=200 worst_cck=579146 avg_cck=25456 budget_cck=71051 worst_pct=815 avg_pct=35 display_hz=50 shown_fps=46.0
+                       ticks=3000 checksum=9ff827ce  (tools/bench.sh dist llb 3000 - --fast_memory=8192)
+Host checksum:         9ff827ce after 3000 ticks  equal. The frame model reproduces the NES's own lag (the main thread
+                       overrunning a frame in field play): the host's NES RAM equals the reference NES's
+                       (tools/nesref -r) at every tick through tick 2,190 of the self-playing game.
+Frame rate claim:      40.5 fps shown on the stock A1200, 46.0 fps with 4 or 8 MB fast RAM (the same), logic at 60
                        ticks a second (game time follows the clock). 50 Hz NOT held on any of them: tools/port.sh
                        prints FAIL. Menus and batting run at 50 Hz on fast RAM; the late frames are field play (the NES
                        game itself uses 95-100% of its CPU there) and a few screen changes.
@@ -29,8 +31,8 @@ Frame rate claim:      37.2 fps shown on the stock A1200, 44.6 fps with 4 or 8 M
                        16x8 multiply, the metasprite builder, nametable writes to the PPU, OAM DMA. What is left is
                        spread over hundreds of game routines and the sprite/tile code of the display.
                        Cheapest upgrade likely to reach 50 Hz: a 68030 accelerator with fast RAM (not measured).
-Not done, not tested:  real A1200 hardware, a Commodore Kickstart ROM (the user supplied one; it was not used: the kit's
-                       bench boots the AROS ROM), NTSC machines, the sound by ear (checked as a WAV from tools/shost.c, not
+Not done, not tested:  real A1200 hardware. The user's Kickstart 3.1 ROM was used only locally: the ADF boots with it
+                       and "llb bench 600" ran under it (the gate bench boots the AROS ROM), NTSC machines, the sound by ear (checked as a WAV from tools/shost.c, not
                        listened to on the emulator), interactive play beyond the scripted bench
                        (controls are wired but untested by a person), CI (the ROM cannot be committed to this public
                        repository, so CI has nothing to build).

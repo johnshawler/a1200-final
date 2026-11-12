@@ -21,10 +21,12 @@ uint16_t nes_ndirty;
 uint8_t  nes_dirty_flag[0x800];
 uint8_t  nes_redraw_all = 1, nes_pal_dirty = 1;
 
+int32_t  nes_cyc;
+uint8_t  nes_in_nmi;
 uint8_t  split_on, split_ctrl, split_chr0, split_chr1, split_fx, split_line, split_seen;
 uint16_t split_t;
 
-uint8_t apu_reg[0x18], apu_trig;
+uint8_t apu_reg[0x18], apu_trig, apu_kill;
 uint32_t apu_written;                           /* bit n: $40nn was written since the sound code last looked */
 uint8_t nes_pad;
 uint8_t pad_shift, pad_strobe;                 /* also used by src/nes68k.s */
@@ -128,6 +130,9 @@ uint8_t nes_read_s0(void)
 {
     uint8_t r = (uint8_t)((ppu_vbl << 7) | (ppu_s0 << 6));
     if (ppu_s0) {
+        /* the hit comes at sprite 0's first line, ((262 - 241) + y + 1) lines after the NMI (341 dots a line) */
+        int32_t at = ((21 + nes_oam[0] + 1) * 341 + 256) / 3;
+        if (nes_cyc < at && nes_cyc > NES_CYC_OFF / 2) nes_cyc = at;
         split_seen = 1;
         split_ctrl = ppu_ctrl; split_chr0 = mmc_chr0; split_chr1 = mmc_chr1; split_t = ppu_t; split_fx = ppu_fx;
         split_line = nes_oam[0];
@@ -204,8 +209,13 @@ void nes_write_slow(uint16_t a, uint8_t v)
         } else if (a < 0x4018) {
             apu_reg[a - 0x4000] = v;
             apu_written |= 1UL << (a - 0x4000);
-            if ((a & 3) == 3 && a < 0x4010) apu_trig |= (uint8_t)(1 << ((a - 0x4000) >> 2));
-            if (a == 0x4015) apu_trig |= 0x10;
+            if ((a & 3) == 3 && a < 0x4010) {
+                uint8_t ch = (uint8_t)(1 << ((a - 0x4000) >> 2));
+                apu_trig |= ch;
+                if (apu_reg[0x15] & ch) apu_kill &= (uint8_t)~ch;   /* the length is loaded again */
+            }
+            if (a == 0x4015) { apu_trig |= 0x10; apu_kill |= (uint8_t)(~v & 0x0f); }   /* a cleared bit stops the
+                                       channel's length counter, even when the game sets the bit again at once */
         }
         return;
     }

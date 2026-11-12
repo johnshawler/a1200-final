@@ -17,6 +17,7 @@ return address: equal is the normal return; otherwise the stack was manipulated 
 import os, collections
 
 N, Z, C, V = 1, 2, 4, 8
+FRAME = 29781                   # NES_FRAME_CYC in src/nes.h
 ALL = 15
 NZ = N | Z
 REG = {'A': 'd0', 'X': 'd1', 'Y': 'd2'}
@@ -39,6 +40,8 @@ def generate(g):
     FIXED, NORETURN, static_branch, successors = g['FIXED'], g['NORETURN'], g['static_branch'], g['successors']
     wait_kind, rd, outdir = g['wait_kind'], g['rd'], g['outdir']
     reset, nmi, irq, dynamic = g['reset'], g['nmi'], g['irq'], g['dynamic_entries']
+    cost, check_points, HLE_CYCLES = g['cost'], g['check_points'], g['HLE_CYCLES']
+    for k in HLE: assert k in HLE_CYCLES, 'HLE routine %s has no HLE_CYCLES entry' % (k,)
 
     def fname(ctx, a): return 'F%d_%04x' % (ctx_of(ctx, a), a)
     banks_for = collections.defaultdict(list)
@@ -132,6 +135,7 @@ def generate(g):
     for k in funcs:
         if k in dynamic: exit_live[k] = ALL
     live_out_all = {}
+    live_in_all = {}
     changed = True
     while changed:
         changed = False
@@ -177,6 +181,7 @@ def generate(g):
                 for t in f['info'][a]['tails']:
                     for c in tail_fns(ctx, a, t): contrib[c] |= exit_live[k]
             live_out_all[k] = lout
+            live_in_all[k] = lin
         for c, v in contrib.items():
             if c in exit_live and (exit_live[c] | v) != exit_live[c]:
                 exit_live[c] |= v; changed = True
@@ -243,6 +248,18 @@ def generate(g):
         stubcount[0] += 1
         return '.s%d' % stubcount[0]
 
+    hs_slots = []
+    lagstubs = []
+    def check_code(a, nz_live):
+        """a check point: past a frame's worth of cycles the NMI runs here (_wait_lag). cmpa leaves X (the
+        6502 carry) alone; N and Z are kept in d6 when they are live"""
+        st = newstub()
+        if nz_live:
+            lagstubs.append((st, ['move.w d6,ccr', 'lea $%04x.l,a1' % a, 'bsr _wait_lag', 'bra %sr' % st]))
+            return ['    move.w ccr,d6', '    cmpa.w #%d,a6' % FRAME, '    bge %s' % st, '    move.w d6,ccr', '%sr:' % st]
+        lagstubs.append((st, ['lea $%04x.l,a1' % a, 'bsr _wait_lag', 'bra %sr' % st]))
+        return ['    cmpa.w #%d,a6' % FRAME, '    bge %s' % st, '%sr:' % st]
+
     for k in sorted(funcs):
         f = funcs[k]; ctx = f['ctx']; e = f['entry']; addrs = f['addrs']; aset = f['aset']
         lout = live_out_all[k]
@@ -256,15 +273,51 @@ def generate(g):
                 if s != fall or nxt != fall or (d and d[0] == 'JMP') or (d and d[1] == 'rel' and s == d[2]):
                     labels.add(s)
         labels.add(e)
+        # 6502 time (see tools/recomp.py): a6 counts cycles. Each block (from a label, or after a conditional
+        # branch, a JSR or a sprite 0 poll) adds its cost with one lea, which leaves the flags alone; a
+        # conditional branch counts as taken (+1) and its fall-through path takes the 1 back.
+        checks = check_points(ctx, e, addrs, aset)
+        labels |= checks
+        lin = live_in_all[k]
+        s0r = set()
+        for a in addrs:
+            d = f['info'][a]['d']
+            if d and d[1] == 'abs' and d[2] == 0x2002: s0r.add(a)
+        def condbr(a):
+            d = f['info'][a]['d']
+            return d and d[1] == 'rel' and static_branch(ctx, a, f['info'][a]['prev']) is None
+        starts = set(labels)
+        if addrs: starts.add(addrs[0])
+        for a in addrs:
+            d = f['info'][a]['d']
+            if d and (condbr(a) or d[0] == 'JSR' or a in s0r): starts.add((a + d[3]) & 0xffff)
+        bcost = {}
+        cur = None
+        for a in addrs:
+            if a in starts: cur = a; bcost[a] = 0
+            d = f['info'][a]['d']
+            if cur is None or not d: continue
+            bcost[cur] += cost(ctx, a)
+            if d[1] == 'rel' and (condbr(a) or static_branch(ctx, a, f['info'][a]['prev']) is True): bcost[cur] += 1
         stubs = []
         E('    xdef %s' % fname(ctx, e))         # exported only so a profiler can name them
         E('%s:' % fname(ctx, e))
         if (ctx, e) in HLE:
-            E('; hand-written equivalent of the 6502 routine')
+            E('; hand-written equivalent of the 6502 routine: it costs HLE_CYCLES in the 6502 time')
+            for l in check_code(e, entry_live[k] & NZ): E(l)
+            E('    lea %d(a6),a6' % HLE_CYCLES[(ctx, e)])
             for l in HLE[(ctx, e)].strip('\n').split('\n'): E(l)
             for l in ['move.w ccr,d6', 'movea.l (sp)+,a0', 'cmpm.w (a2)+,(a0)+', 'bne _unwind', 'move.w d6,ccr', 'jmp (a0)']: E('    ' + l)
-            if (ctx, e) not in HLE_FALLBACK: continue
+            if (ctx, e) not in HLE_FALLBACK:
+                for st, lines in lagstubs:
+                    E('%s:' % st)
+                    for l in lines: E('    ' + l)
+                del lagstubs[:]
+                continue
             E('.orig:')
+            E('    move.l a6,_hs_%s' % fname(ctx, e))            # the translation runs uncounted
+            E('    movea.l #%d,a6' % -0x40000000)
+            hs_slots.append(fname(ctx, e))
         if addrs and addrs[0] != e: E('    bra .L%04x' % e)
         nzsrc = None; c68 = None; known_c = None; fuse = None
         # waits
@@ -288,9 +341,20 @@ def generate(g):
         for idx, a in enumerate(addrs):
             i = f['info'][a]; d = i['d']
             nxt = addrs[idx + 1] if idx + 1 < len(addrs) else None
+            if a in starts and a in bcost:
+                pd = f['info'][addrs[idx - 1]]['d'] if idx else None
+                n_blk = bcost[a]
+                if idx and condbr(addrs[idx - 1]) and ((addrs[idx - 1] + pd[3]) & 0xffff) == a:
+                    if a in labels: E('    lea -1(a6),a6')
+                    else: n_blk -= 1
             if a in labels:
                 E('.L%04x:' % a)
                 nzsrc = None; c68 = None; known_c = None; fuse = None
+            if a in starts and a in bcost:
+                if a in checks:
+                    for l in check_code(a, lin.get(a, ALL) & NZ): E(l)
+                    c68 = None
+                if n_blk: E('    lea %d(a6),a6' % n_blk)
             if not d:
                 E('    move.w #$%04x,d7' % a); E('    bra _fatal_op'); continue
             m, mode, arg, n = d
@@ -496,6 +560,7 @@ def generate(g):
                 L += push + ['bsr %s' % call_target(ctx, a, arg), 'dc.w $%04x' % sw]
                 nzsrc = None; c68 = None
             elif m == 'RTS':
+                if (ctx, e) in HLE: L.append('movea.l _hs_%s,a6' % fname(ctx, e))
                 if exit_live[k] & NZ: L += ['move.w ccr,d6', 'movea.l (sp)+,a0', 'cmpm.w (a2)+,(a0)+', 'bne _unwind', 'move.w d6,ccr', 'jmp (a0)']
                 else: L += ['movea.l (sp)+,a0', 'cmpm.w (a2)+,(a0)+', 'bne _unwind_x', 'jmp (a0)']
             elif m == 'RTI':
@@ -509,14 +574,17 @@ def generate(g):
             ft = bool(i['succ'] and fall in i['succ']) or (fall in i['tails'])
             if ft and m not in ('JMP', 'RTS', 'RTI', 'BRK') and not (m == 'JSR' and arg in NORETURN) and nxt != fall:
                 if mode == 'rel' and static_branch(ctx, a, i['prev']) is True: pass
-                elif fall in aset: L.append('bra .L%04x' % fall)
-                else: L.append('jmp %s' % call_target(ctx, a, fall))
+                else:
+                    if condbr(a): L.append('lea -1(a6),a6')
+                    if fall in aset: L.append('bra .L%04x' % fall)
+                    else: L.append('jmp %s' % call_target(ctx, a, fall))
             E('; %04x %s' % (a, m))
             for l in L:
                 E(l if l.endswith(':') else '    ' + l)
-        for st, lines in stubs:
+        for st, lines in stubs + lagstubs:
             E('%s:' % st)
             for l in lines: E('    ' + l)
+        del lagstubs[:]
 
     # dynamic call stubs: the bank decides which function a call into $8000-$BFFF reaches
     for t, lab in sorted(dynstubs.items()):
@@ -547,6 +615,7 @@ def generate(g):
     E('_disp_hash:')
     for sl in slots:
         E('    dc.w 0,0,0,0' if sl is None else '    dc.w $%04x,%d\n    dc.l %s' % (sl[1], sl[0], fname(sl[0], sl[1])))
+    for h in hs_slots: E('_hs_%s: dc.l 0' % h)
     E('_reset_fn: dc.l %s' % fname(FIXED, reset))
     E('_nmi_fn: dc.l %s' % fname(FIXED, nmi))
 

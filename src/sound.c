@@ -134,12 +134,12 @@ static void quarter(int half)
 void sound_frame(void)
 {
     ULONG ticks = logic_frames - last_frame;
-    UBYTE en = apu_reg[0x15], trig = apu_trig;
+    UBYTE en = apu_reg[0x15], trig = apu_trig, kill = apu_kill;
     ULONG wr = apu_written;
     int n, q;
     if (!on) return;
     last_frame = logic_frames;
-    apu_trig = 0; apu_written = 0;
+    apu_trig = 0; apu_written = 0; apu_kill = 0;
     /* restarted notes. A pulse period is only loaded when the game writes it: the sweep changes it in between */
     for (n = 0; n < 2; n++) {
         if (wr & (3UL << (n * 4 + 2))) pulse[n].timer = (UWORD)(apu_reg[n * 4 + 2] | ((apu_reg[n * 4 + 3] & 7) << 8));
@@ -148,6 +148,10 @@ void sound_frame(void)
     }
     if (trig & 4) { tri_len = len_tab[apu_reg[11] >> 3]; tri_reload = 1; }
     if (trig & 8) { noise.len = len_tab[apu_reg[15] >> 3]; noise.env_start = 1; }
+    if (kill & 1) pulse[0].len = 0;            /* stopped by $4015 since (possibly enabled again in between) */
+    if (kill & 2) pulse[1].len = 0;
+    if (kill & 4) tri_len = 0;
+    if (kill & 8) noise.len = 0;
     if (!(en & 1)) pulse[0].len = 0;
     if (!(en & 2)) pulse[1].len = 0;
     if (!(en & 4)) tri_len = 0;

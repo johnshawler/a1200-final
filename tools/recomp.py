@@ -92,6 +92,55 @@ def static_branch(ctx, a, prev):
     if pm == 'CLV' and m in ('BVC', 'BVS'): return m == 'BVC'
     return None
 
+# ---------------------------------------------------------------- 6502 time (the frame model's cycle budget)
+# The NES main thread does not always finish its work within a frame: then the NMI interrupts it, and the
+# game runs slower there than one main loop per frame (Little League Baseball does this when fielding). The
+# translation counts 6502 cycles (nes_cyc, since the last NMI) and, at check points, runs the NMI when a frame's
+# worth has gone by. Check points: function entries and the targets of branches back (loop heads). Both back
+# ends and tools/nesref/verify.c use the same points and costs, so the checksums stay equal.
+CYC = [7,6,2,8,3,3,5,5,3,2,2,2,4,4,6,6,2,5,2,8,4,4,6,6,2,4,2,7,4,4,7,7,
+       6,6,2,8,3,3,5,5,4,2,2,2,4,4,6,6,2,5,2,8,4,4,6,6,2,4,2,7,4,4,7,7,
+       6,6,2,8,3,3,5,5,3,2,2,2,3,4,6,6,2,5,2,8,4,4,6,6,2,4,2,7,4,4,7,7,
+       6,6,2,8,3,3,5,5,4,2,2,2,5,4,6,6,2,5,2,8,4,4,6,6,2,4,2,7,4,4,7,7,
+       2,6,2,6,3,3,3,3,2,2,2,2,4,4,4,4,2,6,2,6,4,4,4,4,2,5,2,5,5,5,5,5,
+       2,6,2,6,3,3,3,3,2,2,2,2,4,4,4,4,2,5,2,5,4,4,4,4,2,4,2,4,4,4,4,4,
+       2,6,2,8,3,3,5,5,2,2,2,2,4,4,6,6,2,5,2,8,4,4,6,6,2,4,2,7,4,4,7,7,
+       2,6,2,8,3,3,5,5,2,2,2,2,4,4,6,6,2,5,2,8,4,4,6,6,2,4,2,7,4,4,7,7]
+HLE_CYCLES = getattr(game, 'HLE_CYCLES', {})    # (bank, entry) -> cycles a call costs in the model (JSR not included)
+
+def cost(ctx, a):
+    """cycles of the instruction at a, a taken branch not included (+1); sprite DMA ($4014) included"""
+    d = insn(ctx, a)
+    if not d: return 0
+    c = CYC[rd(ctx, a)]
+    if d[0] in ('STA', 'STX', 'STY') and d[1] == 'abs' and d[2] == 0x4014: c += 513
+    return c
+
+CHECKS = os.environ.get('CHECKS', 'calls')     # experiments: coarse (entries, loop heads), calls (+ after each JSR), blocks
+_all_checks = None
+def check_points(ctx, e, addrs, aset):
+    """the check points inside this function: an address that is a check point for any function is one for all
+    (functions overlap: a loop head of one can be plain code inside another)"""
+    global _all_checks
+    if _all_checks is None:
+        _all_checks = set()
+        for (c, x) in entries:
+            ad = body(c, x, True)
+            _all_checks |= {(ctx_of(c, y), y) for y in _local_checks(c, x, ad, set(ad))}
+    return {a for a in addrs if (ctx_of(ctx, a), a) in _all_checks}
+
+def _local_checks(ctx, e, addrs, aset):
+    pts = {e}
+    for a in addrs:
+        d = insn(ctx, a)
+        if not d: continue
+        if (d[1] == 'rel' or (d[0] == 'JMP' and d[1] == 'abs')) and d[2] <= a and d[2] in aset: pts.add(d[2])
+        if CHECKS in ('calls', 'blocks') and d[0] == 'JSR' and (a + 3) & 0xffff in aset: pts.add((a + 3) & 0xffff)
+        if CHECKS == 'blocks' and d[1] == 'rel':
+            if d[2] in aset: pts.add(d[2])
+            if (a + 2) & 0xffff in aset: pts.add((a + 2) & 0xffff)
+    return pts
+
 def successors(ctx, a, prev):
     """(fallthrough?, list of local jump targets, call target or None)"""
     d = insn(ctx, a)
@@ -246,6 +295,7 @@ PACK = '(uint8_t)((nv & 0x80) | (vf ? 0x40 : 0) | 0x20 | (cpu_d ? 8 : 0) | (cpu_
 
 waits_found = []
 s0_found = set()
+checks_found = set()
 
 def gen_function(ctx, entry):
     addrs = body(ctx, entry, True)
@@ -266,10 +316,15 @@ def gen_function(ctx, entry):
     # also the exit-branch form of the sprite 0 wait: BIT $2002 / BMI out / BVC back
     body_lines = []
     prev = None
+    checks = check_points(ctx, entry, addrs, aset)
+    checks_found.update((ctx_of(ctx, x), x) for x in checks)
+    hle = (ctx, entry) in HLE_CYCLES
     for idx, a in enumerate(addrs):
         d = insn(ctx, a)
         nxt = addrs[idx + 1] if idx + 1 < len(addrs) else None
         L = []
+        if a in checks: labels.add(a); L.append('CK(0x%04x);' % a)
+        if d: L.append('nes_cyc += %d;' % cost(ctx, a))
         if not d:
             L.append('SAVE; nes_fatal(0x%04x, 1); return 0;' % a)
             body_lines.append((a, L)); prev = None; continue
@@ -335,11 +390,11 @@ def gen_function(ctx, entry):
                 labels.add(lp)
                 L.append('if (%s) { SAVE; nes_wait(%s, 0x%04x); LOAD; goto L_%04x; }' % (cond, 'WAIT_' + kind, lp, lp))
             elif sb is True:
-                labels.add(arg); L.append('goto L_%04x;' % arg)
+                labels.add(arg); L.append('nes_cyc++; goto L_%04x;' % arg)
             elif sb is False: pass
             else:
-                if arg in aset: labels.add(arg); L.append('if (%s) goto L_%04x;' % (cond, arg))
-                else: L.append('if (%s) { SAVE; return %s; }' % (cond, call_expr(ctx, a, arg)))
+                if arg in aset: labels.add(arg); L.append('if (%s) { nes_cyc++; goto L_%04x; }' % (cond, arg))
+                else: L.append('if (%s) { nes_cyc++; SAVE; return %s; }' % (cond, call_expr(ctx, a, arg)))
         elif m == 'JMP':
             if mode == 'abs':
                 if arg in aset: labels.add(arg); L.append('goto L_%04x;' % arg)
@@ -357,6 +412,7 @@ def gen_function(ctx, entry):
             else:
                 L.append('SAVE; r = %s; if (r != 0x%04x) return r; LOAD;' % (call_expr(ctx, a, arg), (ret + 1) & 0xffff))
         elif m == 'RTS':
+            if hle: L.append('nes_cyc = hs;')
             L.append('s++; t = M[0x100 + s]; s++; t |= M[0x100 + s] << 8; SAVE; return (uint16_t)(t + 1);')
         elif m == 'RTI':
             L.append(PULL.format(d='m') + ' nv = m; vf = m & 0x40; cpu_d = (m >> 3) & 1; cpu_i = (m >> 2) & 1; zv = !(m & 2); c = m & 1;')
@@ -377,6 +433,8 @@ def gen_function(ctx, entry):
     # Instructions reached only by a goto: their fall-through state above was computed with the
     # sequential predecessor, which is what a branch target sees too only if the flags do not matter.
     out.append('uint16_t %s(void)\n{\n    REGS; LOAD;' % fname(ctx, entry))
+    if hle:     # a hand-written routine on the Amiga: it costs HLE_CYCLES in the model, whatever runs inside
+        out.append('    static int32_t hs; CK(0x%04x); nes_cyc += %d; hs = nes_cyc; nes_cyc = NES_CYC_OFF;' % (entry, HLE_CYCLES[(ctx, entry)]))
     if addrs and addrs[0] != entry: labels.add(entry); out.insert(len(out), '    goto L_%04x;' % entry)
     for a, L in body_lines:
         lab = 'L_%04x: ' % a if a in labels else ''
@@ -391,6 +449,7 @@ HDR = '''/* generated by tools/recomp.py from the game's ROM: do not edit */
 extern const uint8_t nes_prg_data[];
 #define REGS uint8_t a, x, y, s, c, zv, nv, vf, m; unsigned t; uint16_t ea, r; (void)m; (void)t; (void)ea; (void)r
 #define LOAD a = cpu_a; x = cpu_x; y = cpu_y; s = cpu_s; c = cpu_c; zv = cpu_z; nv = cpu_n; vf = cpu_v
+#define CK(pc) if (nes_cyc >= NES_FRAME_CYC) { SAVE; nes_wait(WAIT_LAG, pc); LOAD; }
 #define SAVE cpu_a = a; cpu_x = x; cpu_y = y; cpu_s = s; cpu_c = c; cpu_z = zv; cpu_n = nv; cpu_v = vf
 '''
 
@@ -417,6 +476,9 @@ with open(os.path.join(outdir, 'gen_dispatch.c'), 'w') as f:
         for e in byctx[ctx]: f.write('        case 0x%04x: return %s();\n' % (e, fname(ctx, e)))
         f.write('        } break;\n')
     f.write('    }\n    nes_fatal(pc, 3);\n    return 0;\n}\n\nuint16_t nes_reset_entry(void) { return %s(); }\n' % fname(FIXED, reset))
+with open(os.path.join(outdir, 'gen_checks.txt'), 'w') as f:      # for tools/nesref/verify.c
+    for b, x in sorted(checks_found): f.write('C %d %04x\n' % (b, x))
+    for (b, x), k in sorted(HLE_CYCLES.items()): f.write('H %d %04x %d\n' % (b, x, k))
 with open(os.path.join(outdir, 'gen_waits.txt'), 'w') as f:
     for w in sorted(set(waits_found)): f.write('%d %04x %04x %s\n' % w)
     for b, x in sorted(s0_found): f.write('%d %04x 0000 S0\n' % (b, x))

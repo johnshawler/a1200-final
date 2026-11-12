@@ -32,15 +32,24 @@ static void do_nmi(uint16_t pc)
     nes_ram[0x100 + cpu_s] = p; cpu_s--;
     cpu_i = 1;
     split_seen = 0;
+    nes_cyc += 7;
+    nes_in_nmi = 1;
     if (run_nmi() != pc) nes_fatal(pc, 4);
+    nes_in_nmi = 0;
     split_on = split_seen;
 }
 
-/* Called by the translated code in a loop that waits for the next frame. */
+/* Called by the translated code in a loop that waits for the next frame, or (WAIT_LAG) at a check point
+   when the main thread has used up a frame's worth of cycles: on the NES the NMI interrupts it there. */
 void nes_wait(int kind, uint16_t pc)
 {
+    if (kind == WAIT_LAG && nes_in_nmi) return;  /* the NMI handler itself: no nested NMI */
     co_yield();                                 /* the frame is over: the Amiga side draws it */
     logic_frames++;
+#ifdef LAGLOG                                   /* host debugging: where the frames end */
+    { extern void lag_log(int kind, uint16_t pc, int32_t cyc); lag_log(kind, pc, nes_cyc); }
+#endif
+    if (kind == WAIT_LAG) nes_cyc -= NES_FRAME_CYC; else nes_cyc = 0;
     if (ppu_ctrl & 0x80) do_nmi(pc);            /* vertical blank */
     if (kind == WAIT_VBL) ppu_vbl = 1;          /* a $2002 poll sees the flag after the NMI */
 }
