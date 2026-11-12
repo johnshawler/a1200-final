@@ -43,7 +43,6 @@ open('tools/games/%s.py' % game, 'w').write('''"""%s.py - what the tools need to
 Loaded by tools/recomp900.py (--game %s). tools/games/ntm.py is a filled-in example; PLAYBOOK-NGPC.md says how to find
 each entry.
 """
-Z80_IDLE = 0            # the sound program's idle loop (tools/ngpref -p: the busiest Z80 addresses of a quiet frame), 0 = not known
 EXTRA_ENTRIES = set()   # functions no trace reached (task and state routines stored as pointers)
 NOT_WAITS = set()       # branches that look like a wait loop to the translator and are not
 ''' % (game, game))

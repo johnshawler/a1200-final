@@ -11,7 +11,7 @@ const uint8_t *ngp_rom; uint32_t ngp_rom_len; const uint8_t *ngp_font;
 uint8_t ngp_pad;
 uint32_t ngp_fatal_pc; int ngp_fatal_why;
 uint32_t ngp_frames;
-uint16_t ngp_z80_idle;
+uint8_t ngp_z80_skip = 1;               /* 0: never skip the sound program's idle time (to check that skipping changes nothing) */
 uint32_t ngp_z80_steps, ngp_cpu_steps;      /* instructions run: sound program; main CPU when the interpreter runs it */
 
 static uint8_t ipend[16];               /* by number in the RAM vector table: 5 vertical blank, 6 Z80, 7-10 timers */
@@ -53,28 +53,41 @@ static int32_t z80_irq_period(void)
     else { if (!(ngp_io[0x20] & 4)) return 0; states = (t2 * t3) << sh2[ngp_io[0x28] & 3]; }
     return (int32_t)states;                             /* two matches per interrupt, two CPU states per T-state */
 }
-static void z80_run(int32_t tstates)
+/* Run the sound program for some T-states. A sound program idles in a loop that polls for work and uses the
+   whole processor doing so. When it comes back to the head of a loop with exactly the state it had there last
+   time, having written nothing, and the main CPU has not touched it either, it will go round until something
+   changes: that time is skipped. No game knowledge is needed for it.
+   until_idle: stop at that point. The frame model has no clock inside a frame, so before the main CPU signals
+   the sound processor (an NMI) it is given the time to finish what it was doing; on the console the game's
+   own delays make sure of that. */
+static void z80_run(int32_t tstates, int until_idle)
 {
-    static uint8_t idle_reg[8], idle_f; static uint16_t idle_sp; static uint32_t idle_serial; static uint8_t idle_valid;
+    static Z80 seen; static uint32_t seen_serial; static uint8_t seen_valid;
     if (!z80_on) return;
     while (tstates > 0) {
         int32_t period = z80_irq_period(), t;
+        uint16_t pc0;
         if (period && z80_irq_in <= 0) { z80.irq_line = 1; z80_irq_in += period; }
-        if (ngp_z80_idle && z80.pc == ngp_z80_idle && !(z80.irq_line && z80.iff1) && !z80.nmi_pending) {
-            /* at its idle loop: if nothing changed since it was last here, it stays here until something does */
-            if (idle_valid && !z80_wrote && idle_serial == z80_serial && idle_sp == z80.sp && idle_f == z80.f && !memcmp(idle_reg, z80.r, 8)) {
-                t = (period && z80_irq_in < tstates) ? z80_irq_in : tstates;
-                if (t <= 0) t = 1;
-                tstates -= t; z80_irq_in -= t; continue;
-            }
-            memcpy(idle_reg, z80.r, 8); idle_f = z80.f; idle_sp = z80.sp; idle_serial = z80_serial; idle_valid = 1; z80_wrote = 0;
+        if (z80.halted && !(z80.irq_line && z80.iff1) && !z80.nmi_pending) {       /* HALT: until its next interrupt */
+            if (until_idle) return;
+            t = (period && z80_irq_in < tstates) ? z80_irq_in : tstates;
+            if (t <= 0) t = 1;
+            tstates -= t; z80_irq_in -= t; continue;
         }
+        pc0 = z80.pc;
         t = z80_step(); ngp_z80_steps++;
         tstates -= t; z80_irq_in -= t;
+        if (z80.pc < pc0 && ngp_z80_skip) {             /* a jump back: perhaps the head of its idle loop */
+            if (seen_valid && !z80_wrote && seen_serial == z80_serial && !memcmp(&seen, &z80, sizeof z80)) {
+                if (until_idle) return;
+                t = (period && z80_irq_in < tstates) ? z80_irq_in : tstates;
+                if (t > 0) { tstates -= t; z80_irq_in -= t; }
+            } else { memcpy(&seen, &z80, sizeof z80); seen_serial = z80_serial; seen_valid = 1; z80_wrote = 0; }
+        }
     }
 }
-void ngp_z80_frame(void) { z80_run(515 * 199 / 2); }
-void ngp_z80_slice(void) { z80_run(256); }
+void ngp_z80_frame(void) { z80_run(515 * 199 / 2, 0); }
+void ngp_z80_slice(void) { z80_run(256, 0); }
 
 /* ---- memory outside RAM and ROM ---- */
 uint8_t ngp_rd_slow(uint32_t a)
@@ -107,7 +120,7 @@ void ngp_wr_slow(uint32_t a, uint8_t v)
         case 0x73: if (!(v & 0x08)) ipend[7] = 0; if (!(v & 0x80)) ipend[8] = 0; break;
         case 0x74: if (!(v & 0x08)) ipend[9] = 0; if (!(v & 0x80)) ipend[10] = 0; break;
         case 0xb9: if (v == 0x55) { z80_on = 1; z80_reset(); z80_irq_in = 0; } else if (v == 0xaa) z80_on = 0; z80_serial++; break;
-        case 0xba: z80.nmi_pending = 1; z80_serial++; break;
+        case 0xba: z80_run(515 * 199 / 2, 1); z80.nmi_pending = 1; z80_serial++; break;    /* at most a frame's time to get ready */
         case 0xbc: z80_serial++; break;
         }
         ngp_io[a] = v; return;

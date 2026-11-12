@@ -12,6 +12,10 @@ Your instructions are in `BRIEF.md`. Read all of it before you do anything else,
 - NES (or other 6502) ports: read `PLAYBOOK-NES.md` first and reuse its tools. Knowledge about one game goes in
   `tools/games/<game>.py`; before finishing, add an entry to the playbook's lessons log and fold general
   lessons into its sections. That file is how the next port starts better than this one.
+- Neo Geo Pocket (Color) ports (TLCS-900/H): read `PLAYBOOK-NGPC.md` first, all of it, and reuse its tools
+  (`tools/new_port_ngpc.sh`, `tools/ngpref`, `tools/recomp900.py`, `src/ngpc/`). The port's sources are in
+  `src/ngpc/` (its `main.c` is the kit skeleton already). Before finishing, add an entry to that playbook's
+  lessons log, fold general lessons into its sections and take what you built out of its "not done yet" list.
 - Work in the order of `PIPELINE.md` (milestones reprioritised from what this port found; its backlog lists the
   next items for this port). Read `LEARNINGS.md` before changing the translator or the display.
 - Keep `NOTES.md`: one line for every place the brief was unclear, wrong or missing something.

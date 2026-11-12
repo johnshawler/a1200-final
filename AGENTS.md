@@ -9,6 +9,11 @@ Your instructions are in `BRIEF.md`. Read all of it before you do anything else,
 - Run `tools/setup.sh` once. Describe your port in `port.conf`. Then `tools/port.sh` builds it, benches it on
   the emulated stock A1200, runs your host test and checks the gates. The port is done only when it prints
   `PASS`. Never claim a frame rate that `tools/port.sh` did not print.
+- NES (or other 6502) ports: read `PLAYBOOK-NES.md` first and reuse its tools.
+- Neo Geo Pocket (Color) ports (TLCS-900/H): read `PLAYBOOK-NGPC.md` first, all of it, and reuse its tools
+  (`tools/new_port_ngpc.sh`, `tools/ngpref`, `tools/recomp900.py`, `src/ngpc/`). The port's sources are in
+  `src/ngpc/` (its `main.c` is the kit skeleton already). Before finishing, add an entry to that playbook's
+  lessons log, fold general lessons into its sections and take what you built out of its "not done yet" list.
 - Keep `NOTES.md`: one line for every place the brief was unclear, wrong or missing something.
 - When you finish, or are stuck at a gate after real attempts, write the PORT REPORT in the brief's format
   to `REPORT.txt`.

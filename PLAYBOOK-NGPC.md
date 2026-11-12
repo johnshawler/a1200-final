@@ -47,9 +47,9 @@ faster code than the C translation gives.
        ./ngpref ... -s -w <main wait loop addresses> -W <sound program idle loop addresses>
 
    Do it per scene. Write the numbers and the verdict (section 6) in the feasibility note.
-5. Trace with `-c tools/flow_ngpc/<game>_<scene>.txt` over every scene you can reach, write the idle loop into
-   `tools/games/<game>.py`, then `tools/make_assets_ngpc.sh` and `tools/verify_ngpc.sh <ticks>`: the
-   translation must equal the interpreter after every tick. Only then the Amiga.
+5. Trace with `-c tools/flow_ngpc/<game>_<scene>.txt` over every scene you can reach, then
+   `tools/make_assets_ngpc.sh` and `tools/verify_ngpc.sh <ticks>`: the translation must equal the interpreter
+   after every tick. Only then the Amiga.
 6. `tools/port.sh fast` (and `tools/port.sh` if the game fits a stock machine). `tools/long_bench.sh` runs a
    port that is still too slow for the referee's time limit.
 
@@ -86,10 +86,17 @@ sound processor's frame of time, and the interrupts it raised.
   running Z80 it never gets past its logo. There the sound processor gets a slice of time; after 4,096 polls in
   a row the frame ends.
 - **The sound program is part of the logic.** It answers the game through shared RAM, so it must run in the
-  host test and on the Amiga. It idles in a polling loop that uses its whole processor: give its address to the
-  tools (`Z80_IDLE`) so the idle time is skipped. Skipping changes the sound processor's own variables slightly
-  (its interrupts arrive at another point of the loop); over the 3,600-tick bench of Neo Turf Masters the
-  game's RAM and the K2GE's memory were identical with and without it.
+  host test and on the Amiga. It idles in polling loops that use its whole processor. `ngp.c` skips that time
+  by itself: when the Z80 comes back to the head of a loop in exactly the state it had there before, with
+  nothing written by either processor, it would go round until something changes. Skipping moves the sound
+  processor's own variables slightly (its interrupts arrive at another point of the loop); over the 3,600-tick
+  bench of Neo Turf Masters the game's RAM and the K2GE's memory were identical with and without it
+  (`-DNGP_NO_IDLE_SKIP` builds without).
+- **The frame model has no clock inside a frame.** The game starts the Z80 and soon sends it an NMI; on the
+  console the Z80 has run its start-up code by then. In the model it has not run at all, took the NMI with no
+  stack and crashed, silently: the game went on. So before an NMI the model lets the Z80 run until it idles.
+  Check that the sound program is alive: `host_test N -v` prints its instructions per tick, and a profile of
+  it must show its idle loop, not address 0x0038 and 0xFFFF.
 - **Lag.** With the reference machine, check that the original finishes its work within a frame in the busy
   scenes (`-s`: busy states stay under 102,485). If it does not, game time on the console is slower there and
   the frame model would need cycle budgets. Neo Turf Masters: at most 65% of a frame in the bench.

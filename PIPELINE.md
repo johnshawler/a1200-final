@@ -40,6 +40,18 @@ Rules that come with it:
 - If milestone 3 says the stock machine cannot hold 50 Hz, say so in the report early and target the cheapest
   upgrade explicitly. Don't spend days on the stock machine.
 
+### Part A for a Neo Geo Pocket Color port
+
+The same order, with these differences (details in `PLAYBOOK-NGPC.md`):
+
+- Milestones 1 and 2 exist as tools (`tools/ngpref`): running them on a new game takes minutes. Milestone 2
+  measures **two** processors (main CPU and the Z80's sound program) and is preceded by a memory check: how
+  much of the cartridge holds data.
+- Milestone 5's gate is `tools/verify_ngpc.sh`; milestone 6 is `tools/make_assets_ngpc.sh`.
+- Milestone 7 (68k back end) is not built for the TLCS-900/H: the Amiga runs the C translation, and the sound
+  program runs through an interpreter there. Both are the first things to replace (playbook section 8).
+- Milestones 10 to 14: a correct, slow picture exists (`src/ngpc/main.c`); a fast display and sound do not.
+
 ## Part B: backlog for this port, by expected gain per effort
 
 Status after the fast-RAM work: 4 MB fast RAM 44.6 fps, stock 37.2 fps, checksum equal. Field play on 4 MB:

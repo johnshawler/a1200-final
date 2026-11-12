@@ -31,7 +31,8 @@ each port starts from zero.
 - Follow the playbook's first-day checklist and `PIPELINE.md`: reference machine, memory check, **load of the
   main CPU and of the sound program per scene, verdict before code**, traces of every scene, translation,
   proof tick by tick (`tools/verify_ngpc.sh`), then the Amiga checksum, then speed, display and sound.
-- The sound program is part of the game's logic: games wait for its answers. Give the tools its idle loop.
+- The sound program is part of the game's logic: games wait for its answers. Check that it is alive in the port's
+  frame model (the playbook says how) before trusting any number.
 - Put game-specific knowledge in `tools/games/<game>.py`, nowhere else in the tools.
 - When something general is learned (an instruction form made native, a hardware feature modelled, a pitfall,
   a better number), write it into the playbook section it belongs to at once.
