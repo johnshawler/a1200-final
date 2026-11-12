@@ -141,11 +141,20 @@ Two numbers decide: the memory, and the instructions per frame of *both* process
 | Sound program, per frame, outside its idle loop | median 1,500-4,200 instructions while music plays, up to 6,200; 4 interrupts a frame |
 | Interrupts of the main CPU | vertical blank only |
 
-The console's CPU does up to about 16,000 instructions in a frame and they are 16- and 32-bit instructions: it
-is not slower than a 14 MHz 68EC020 that fetches its code from chip RAM. So a game that keeps the console's
-CPU busy cannot hold 50 Hz on a stock A1200 by translation, and the sound program's work comes on top.
-Measured on the emulated A1200 with the C translation: see the lessons log (section 9) for the numbers of the
-first game. Until a faster back end exists, plan for fast RAM and say so in the report from the start.
+What an instruction costs on the emulated A1200 with 4 MB fast RAM, as the tools are now (from two benches of
+different mix, 300 and 900 ticks, solved for the two unknowns):
+
+| | Colour clocks each | A frame has 71,051 |
+| --- | --- | --- |
+| Main CPU instruction, C translation (registers in memory) | about 53 | 2,000 instructions a tick are 1.5 frames |
+| Sound program instruction, through the Z80 interpreter | about 249 | 2,600 instructions a tick are 9 frames |
+
+So today the sound program is 86% of the logic time, and the logic alone is ten times too slow. Neither number
+is the end of the road: the interpreter is a stopgap, and the NES port's 68k back end ran its translated code
+three times faster than its C back end. What a 68k back end and a translated sound program reach on this
+machine has not been measured. The console's CPU does up to 16,000 instructions a frame, and they are 16- and
+32-bit instructions: it is not a slower processor than a 14 MHz 68EC020, so expect a game that keeps it busy
+to need more than a stock A1200, and say so in the report from the start.
 
 ## 7. Display and sound: what exists, what to build
 
@@ -213,8 +222,16 @@ sections above if a lesson is general.
   interpreter after every one of 3,600 ticks (work RAM, shared RAM and K2GE memory compared each tick).
 - Bugs the proof found, each in minutes: `LDIR` executed once instead of to the end; a jump table whose entry
   points at the next instruction was missing from the trace.
-- Verdict from day-one numbers: the cartridge data alone (1,544 KB) rules out a stock A1200; the two
-  processors together need several thousand translated instructions a frame.
+- Verdict from day-one numbers: the cartridge data alone (1,544 KB) rules out a stock A1200 (the program
+  says "not enough memory for the cartridge" and ends); the two processors together need several thousand
+  translated instructions a frame.
+- On the emulated A1200 with 4 MB fast RAM the checksum equals the host test's after 300 ticks (fa876f99) and
+  after 900 (544160df). Logic costs 205,074 colour clocks a tick over the first 300 ticks and 764,273 over the
+  first 900: 0.9 and 0.3 pictures a second with the first display, which itself takes 25 to 30 frames a picture.
+- The frame model had the Z80 crash silently at the game's first NMI (it had not run its start-up code yet in
+  the model). It showed only as a strange load: 7,300 Z80 instructions every tick, at addresses 0x0038 and
+  0xFFFF. Fixing it made the Amiga logic 7 times cheaper. The game's own state looked fine all along: the
+  checksum cannot show a fault that both sides share.
 - Next time: do the memory check and the two load numbers before anything else (they took minutes once the
-  tools existed); translate the sound program before trying the Amiga; build the 68k back end before judging
-  speed.
+  tools existed); look at what the sound program executes in the port's frame model, not only on the reference
+  machine; translate the sound program before trying the Amiga; build the 68k back end before judging speed.
