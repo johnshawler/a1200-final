@@ -40,21 +40,28 @@ void host_render(const char *path)
             if (!(ppu_mask & 0x08) || (x < 8 && !(ppu_mask & 2))) px[y][x] = 0;
         }
     }
-    if (ppu_mask & 0x10)
-        for (i = 63; i >= 0; i--) {
+    if (ppu_mask & 0x10) {                  /* per pixel: the lowest numbered opaque sprite decides (NES priority) */
+        static uint8_t spx[240][256], sprio[240][256], taken[240][256];
+        memset(taken, 0, sizeof taken);
+        for (i = 0; i < 64; i++) {
             int sy = nes_oam[i * 4] + 1, tile = nes_oam[i * 4 + 1], at = nes_oam[i * 4 + 2], sx = nes_oam[i * 4 + 3], r, b;
-            for (r = 0; r < 8; r++) {
-                int yy = sy + r, row = (at & 0x80) ? 7 - r : r; uint16_t pa = ((ppu_ctrl & 0x08) ? 0x1000 : 0) + tile * 16 + row;
+            int h = (ppu_ctrl & 0x20) ? 16 : 8;
+            for (r = 0; r < h; r++) {
+                int yy = sy + r, row = (at & 0x80) ? h - 1 - r : r; uint16_t pa;
+                if (h == 16) pa = (uint16_t)(((tile & 1) ? 0x1000 : 0) + (tile & 0xfe) * 16 + (row >= 8 ? 16 : 0) + (row & 7));
+                else pa = (uint16_t)(((ppu_ctrl & 0x08) ? 0x1000 : 0) + tile * 16 + row);
                 uint8_t p0 = chr_byte(mmc_chr0, mmc_chr1, pa), p1 = chr_byte(mmc_chr0, mmc_chr1, pa + 8);
                 if (yy >= 240) continue;
                 for (b = 0; b < 8; b++) {
                     int bit = (at & 0x40) ? b : 7 - b, c = ((p0 >> bit) & 1) | (((p1 >> bit) & 1) << 1);
-                    if (!c || sx + b > 255) continue;
-                    if ((at & 0x20) && (px[yy][sx + b] & 3)) continue;
-                    px[yy][sx + b] = 0x10 | ((at & 3) << 2) | c;
+                    if (!c || sx + b > 255 || taken[yy][sx + b]) continue;
+                    taken[yy][sx + b] = 1; spx[yy][sx + b] = (uint8_t)(0x10 | ((at & 3) << 2) | c); sprio[yy][sx + b] = at & 0x20;
                 }
             }
         }
+        for (y = 0; y < 240; y++) for (x = 0; x < 256; x++)
+            if (taken[y][x] && !(sprio[y][x] && (px[y][x] & 3))) px[y][x] = spx[y][x];
+    }
     f = fopen(path, "wb"); if (!f) return;
     fprintf(f, "P6\n256 240\n255\n");
     for (y = 0; y < 240; y++) for (x = 0; x < 256; x++) {

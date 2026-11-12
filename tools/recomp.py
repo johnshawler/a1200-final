@@ -32,6 +32,7 @@ if args[0] == '--game': gamename, args = args[1], args[2:]
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), 'games'))
 game = importlib.import_module(gamename)
 NORETURN = game.NORETURN
+BANK_SWITCH = getattr(game, 'BANK_SWITCH', set())
 sys.argv = [sys.argv[0]] + args
 
 rom = open(sys.argv[1], 'rb').read()
@@ -123,12 +124,29 @@ def body(ctx, entry, stop_at_entries):
             work.append((t, d))
     return sorted(seen)
 
+def plausible(ctx, w):
+    """a jump-table word that looks like code: its first instructions decode, and it is not a BRK"""
+    if ctx == FIXED and w < 0xc000: return False        # the bank is unknown from the fixed bank
+    a = w
+    for _ in range(4):
+        d = insn(ctx, a)
+        if not d or d[0] == 'BRK': return False
+        if d[0] in ('RTS', 'RTI', 'JMP'): return True
+        a = (a + d[3]) & 0xffff
+    return True
+
 # fixpoint over JSR targets
 while True:
     new = set()
     for (ctx, e) in list(entries):
         for a in body(ctx, e, False):
             d = insn(ctx, a)
+            if d and d[0] in ('JSR', 'JMP') and d[1] == 'abs' and 0x8000 <= d[2] < 0xc000 and a >= 0xc000:
+                # a call into the switchable bank from the fixed one: LDA #n / JSR <bank switch> just before it?
+                p1, p2 = insn(ctx, (a - 3) & 0xffff), insn(ctx, (a - 5) & 0xffff)
+                if p1 and p2 and p1[0] == 'JSR' and p1[2] in BANK_SWITCH and p2[0] == 'LDA' and p2[1] == 'imm':
+                    b = p2[2] & 7
+                    if b != FIXED and plausible(b, d[2]): new.add((b, d[2])); dyn['all'].add((b, d[2]))
             if d and d[0] == 'JSR':
                 t = d[2]
                 if t >= 0xc000: new.add((FIXED, t))
@@ -139,8 +157,9 @@ while True:
                 for k in range(64):
                     w = rd(ctx, tb + 2 * k) | rd(ctx, tb + 2 * k + 1) << 8
                     if w < 0x8000 or (ctx == FIXED and w < 0xc000 and (ctx, w) not in entries): break
-                    if (ctx_of(ctx, w), w) in executed or (FIXED if w >= 0xc000 else ctx, w) in dyn['I']:
+                    if (ctx_of(ctx, w), w) in executed or (FIXED if w >= 0xc000 else ctx, w) in dyn['I'] or plausible(ctx, w):
                         new.add((ctx_of(ctx, w), w)); dyn['all'].add((ctx_of(ctx, w), w))
+                    else: break                                 # not code: the table has ended
     new -= entries
     if not new: break
     entries |= new

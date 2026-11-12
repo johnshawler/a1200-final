@@ -233,6 +233,8 @@ static UBYTE *spr_mem[2][7];            /* two sets of sprite lists, swapped eve
 static int spr_set;
 int video_sprites_dropped;
 
+#define SPR_H ((ppu_ctrl & 0x20) ? 16 : 8)    /* PPUCTRL bit 5: 8x16 sprites (two tiles, the pattern table from bit 0 of the tile) */
+
 static void build_groups(void)
 {
     int i, j, k;
@@ -245,17 +247,17 @@ static void build_groups(void)
             Group *g = &grp[j];
             WORD nx0 = x < g->x0 ? x : g->x0, nx1 = x + 8 > g->x1 ? x + 8 : g->x1;
             if (nx1 - nx0 > SPR_W || g->n >= MAXIN) continue;
-            if (sy > g->y1 + 1 || sy + 8 < g->y0 - 1 || x > g->x1 + 1 || x + 8 < g->x0 - 1) continue;
+            if (sy > g->y1 + 1 || sy + SPR_H < g->y0 - 1 || x > g->x1 + 1 || x + 8 < g->x0 - 1) continue;
             g->x0 = nx0; g->x1 = nx1;
             if (sy < g->y0) g->y0 = sy;
-            if (sy + 8 > g->y1) g->y1 = sy + 8;
+            if (sy + SPR_H > g->y1) g->y1 = sy + SPR_H;
             g->idx[g->n++] = (UBYTE)i;
             if ((nes_oam[i * 4 + 2] & 3) != 3) g->pal3only = 0;
             break;
         }
         if (j >= ngrp) {
             Group *g = &grp[ngrp++];
-            g->x0 = x; g->x1 = x + 8; g->y0 = sy; g->y1 = sy + 8; g->n = 1; g->idx[0] = (UBYTE)i;
+            g->x0 = x; g->x1 = x + 8; g->y0 = sy; g->y1 = sy + SPR_H; g->n = 1; g->idx[0] = (UBYTE)i;
             g->pal3only = (nes_oam[i * 4 + 2] & 3) == 3;
         }
     }
@@ -303,21 +305,77 @@ static void assign(void)
 }
 
 /* draw the NES sprites of group g into one segment's lines: e = even sprite lines, o = odd sprite lines */
+/* NES sprite priority: the frontmost (lowest numbered) sprite pixel decides, and if that sprite is flagged
+   "behind the background" and the background pixel is not colour 0, the background shows: the sprite hides
+   itself AND every higher-numbered sprite there. Games use it to tuck sprites behind scenery. Amiga sprites are
+   always in front, so such pixels are cleared in the sprite data instead. */
+static WORD nes_scr_x, nes_scr_y;       /* the NES scroll of the frame being drawn */
+
+static UBYTE bg_bits(LONG uc, int wy)  /* background opacity of one tile row: 8 pixels, bit 7 = leftmost */
+{
+    int r = wy >> 3;
+    const UBYTE *src = chr_tile(nes_vram[nt_cell(uc & 63, r)], r);
+    return (UBYTE)(src[wy & 7] | src[(wy & 7) + 8]);
+}
+
+static UBYTE bg_opaque8(int x, int y)   /* opacity of the 8 background pixels from screen x on screen line y */
+{
+    int wx = (nes_scr_x + x) & 511, wy = (nes_scr_y + y) % 240, fine = wx & 7;
+    UWORD v;
+    UBYTE m;
+    if (!(ppu_mask & 0x08) || y < 0 || y >= 240) return 0;
+    v = (UWORD)((bg_bits(wx >> 3, wy) << 8) | bg_bits((wx >> 3) + 1, wy));
+    m = (UBYTE)(v >> (8 - fine));
+    if (!(ppu_mask & 2) && x < 8) m &= (UBYTE)(0xff >> (8 - x));   /* the hidden left column shows no background */
+    return m;
+}
+
+/* a sprite with the "behind" flag: draw it where the background is clear, clear it where it is not */
+static void put_behind(UBYTE *e, UBYTE *o, const UBYTE *src, UBYTE at, int dx, int sx, int sy)
+{
+    int r, sh = 8 - (dx & 7);
+    e += dx >> 3; if (o) o += dx >> 3;
+    for (r = 0; r < 8; r++, e += 16, o = o ? o + 16 : 0) {
+        int row = (at & 0x80) ? 7 - r : r;
+        UBYTE p0 = src[row], p1 = src[row + 8], m, vis;
+        UWORD k;
+        if (at & 0x40) { p0 = flip_tab[p0]; p1 = flip_tab[p1]; }
+        m = p0 | p1;
+        if (!m) continue;
+        vis = (UBYTE)(m & ~bg_opaque8(sx, sy + r));
+        k = (UWORD)~(m << sh);
+        PUTW(e, (GETW(e) & k) | ((p0 & vis) << sh));
+        PUTW(e + 8, (GETW(e + 8) & k) | ((p1 & vis) << sh));
+        if (o) {
+            PUTW(o, (GETW(o) & k) | (((at & 1) ? vis : 0) << sh));
+            PUTW(o + 8, (GETW(o + 8) & k) | (((at & 2) ? vis : 0) << sh));
+        }
+    }
+}
+
 static void render_group(Group *g, UBYTE *e, UBYTE *o)
 {
-    int k;
+    int k, half, tall = (ppu_ctrl & 0x20) != 0;
     for (k = g->n - 1; k >= 0; k--) {           /* highest OAM index first: lower numbers end on top */
         int i = g->idx[k];
         UBYTE tile = nes_oam[i * 4 + 1], at = nes_oam[i * 4 + 2];
         int dx = nes_oam[i * 4 + 3] - g->x0, dy = nes_oam[i * 4] + 1 - g->y0;
         int upper = split_on && (int)nes_oam[i * 4] + 1 <= split_line;      /* sprites above the split: upper tile set */
         UBYTE c0 = upper ? split_chr0 : mmc_chr0, c1 = upper ? split_chr1 : mmc_chr1, ctl = upper ? split_ctrl : ppu_ctrl;
-        UWORD a = (UWORD)(((ctl & 0x08) ? 0x1000 : 0) + tile * 16), bank;
-        const UBYTE *src;
-        bank = (mmc_ctrl & 0x10) ? ((a < 0x1000) ? c0 : c1) : ((c0 & 0x1e) | (a >> 12));
-        src = nes_chr_data + (ULONG)(bank & 31) * 0x1000 + (a & 0xfff);
-        spr_put(e + dy * 16, o ? o + dy * 16 : e, src,
-                (ULONG)(dx | ((at & 0x40) << 2) | ((at & 0x80) << 2) | ((at & 3) << 10) | (o ? 0x1000 : 0)));
+        for (half = 0; half <= tall; half++) {  /* 8x16: the top tile, then the bottom one (swapped when v-flipped) */
+            UWORD a, bank;
+            const UBYTE *src;
+            int line = dy + half * 8;
+            if (tall) a = (UWORD)(((tile & 1) ? 0x1000 : 0) + ((tile & 0xfe) + (half ^ ((at & 0x80) ? 1 : 0))) * 16);
+            else a = (UWORD)(((ctl & 0x08) ? 0x1000 : 0) + tile * 16);
+            bank = (mmc_ctrl & 0x10) ? ((a < 0x1000) ? c0 : c1) : ((c0 & 0x1e) | (a >> 12));
+            src = nes_chr_data + (ULONG)(bank & 31) * 0x1000 + (a & 0xfff);
+            if (at & 0x20)
+                put_behind(e + line * 16, o ? o + line * 16 : 0, src, at, dx, nes_oam[i * 4 + 3], nes_oam[i * 4] + 1 + half * 8);
+            else
+                spr_put(e + line * 16, o ? o + line * 16 : e, src,
+                        (ULONG)(dx | ((at & 0x40) << 2) | ((at & 0x80) << 2) | ((at & 3) << 10) | (o ? 0x1000 : 0)));
+        }
     }
 }
 
@@ -337,15 +395,17 @@ static int ncache[2];
 
 static ULONG group_sig(Group *g, int with_o)
 {
-    ULONG h = (ULONG)g->n * 0x9e3779b1UL ^ (ULONG)(g->y1 - g->y0) ^ ((ULONG)with_o << 31);
-    int k;
+    ULONG h = (ULONG)g->n * 0x9e3779b1UL ^ (ULONG)(g->y1 - g->y0) ^ ((ULONG)with_o << 31) ^ ((ULONG)(ppu_ctrl & 0x28) << 20);
+    int k, behind = 0;
     for (k = 0; k < g->n; k++) {
         int i = g->idx[k];
         int upper = split_on && (int)nes_oam[i * 4] + 1 <= split_line;
         ULONG v = ((ULONG)nes_oam[i * 4 + 1] << 24) | ((ULONG)nes_oam[i * 4 + 2] << 16)
                 | ((ULONG)(UBYTE)(nes_oam[i * 4 + 3] - g->x0) << 8) | (UBYTE)(nes_oam[i * 4] + 1 - g->y0);
         h = (h ^ v ^ (ULONG)upper) * 16777619UL + (ULONG)k;
+        if (nes_oam[i * 4 + 2] & 0x20) behind = 1;
     }
+    if (behind) { static ULONG unique; h ^= 0x5bd1e995UL * ++unique; }     /* never matches the cache */
     return h;
 }
 
@@ -448,6 +508,7 @@ void video_frame(void)
     LONG vlo, vhi;
     WORD sx = (WORD)((((ppu_t & 0x1f) << 3) | ppu_fx) + ((ppu_t >> 10) & 1) * 256);
     WORD sy = (WORD)((((ppu_t >> 5) & 0x1f) * 8 + ((ppu_t >> 12) & 7)) % 240);
+    nes_scr_x = sx; nes_scr_y = sy;
     UBYTE nsplit;
 
     /* camera: follow the NES scroll by its change since the last frame (it wraps at 512) */

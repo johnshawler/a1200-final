@@ -135,6 +135,42 @@ static unsigned short bench_input(unsigned int t)      /* copy of game_bench_inp
     /* BENCH INPUT END */
     return 0;
 }
+/* INPUT=file: play this script instead of the bench input (tools/nesref format: "first last BUTTONS") */
+static struct { unsigned a, b; unsigned short bits; } script[4096]; static int nscript = -1;
+static unsigned short input_at(unsigned t)
+{
+    unsigned short r = 0; int i;
+    if (nscript < 0) {
+        FILE *f = getenv("INPUT") ? fopen(getenv("INPUT"), "r") : 0; char l[256];
+        nscript = 0;
+        while (f && fgets(l, sizeof l, f) && nscript < 4096) {
+            char *p = l, *tok; unsigned a, b;
+            if (sscanf(l, "%u %u", &a, &b) != 2) continue;
+            strtol(p, &p, 10); strtol(p, &p, 10);
+            script[nscript].a = a; script[nscript].b = b; script[nscript].bits = 0;
+            for (tok = strtok(p, " \t\r\n+"); tok; tok = strtok(0, " \t\r\n+")) {
+                if (!strcmp(tok, "A")) script[nscript].bits |= 16; else if (!strcmp(tok, "B")) script[nscript].bits |= 32;
+                else if (!strcmp(tok, "START")) script[nscript].bits |= 64; else if (!strcmp(tok, "SELECT")) script[nscript].bits |= 128;
+                else if (!strcmp(tok, "UP")) script[nscript].bits |= 8; else if (!strcmp(tok, "DOWN")) script[nscript].bits |= 4;
+                else if (!strcmp(tok, "LEFT")) script[nscript].bits |= 2; else if (!strcmp(tok, "RIGHT")) script[nscript].bits |= 1;
+            }
+            nscript++;
+        }
+        if (f) fclose(f);
+        if (!f) nscript = -2;
+    }
+    if (nscript == -2) return bench_input(t);
+    for (i = 0; i < nscript; i++) if (t >= script[i].a && t <= script[i].b) r |= script[i].bits;
+    return r;
+}
+
+static void load(const char *name, uint8_t *dst)
+{
+    FILE *f = fopen(name, "rb");
+    if (!f || fread(dst, 1, 0x20000, f) != 0x20000) { fprintf(stderr, "cannot read %s (run tools/make_assets.sh)\n", name); exit(2); }
+    fclose(f);
+}
+
 static uint8_t pad_of(unsigned short in)
 {
     uint8_t p = 0;
@@ -161,7 +197,7 @@ int main(int argc, char **argv)
     nes_init(nes_prg_data, nes_chr_data);
     PC = (uint16_t)(nes_rd(0xfffc) | nes_rd(0xfffd) << 8);
     for (t = 0; t < n; t++) {
-        nes_pad = pad_of(bench_input(t));
+        nes_pad = pad_of(input_at(t));
         if (kind >= 0) {                                /* start of a frame after a wait: NMI, then the vblank flag */
             if (ppu_ctrl & 0x80) {
                 uint16_t back = PC; uint8_t s0 = S;

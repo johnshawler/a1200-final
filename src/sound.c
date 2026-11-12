@@ -49,7 +49,7 @@ int sound_load(void)
         for (i = 0; i < 8; i++) wave_pulse[d][i] = (duty_seq[d] & (0x80 >> i)) ? 60 : -60;
     }
     if (!(wave_tri = sys_alloc(16, MEMF_CHIP))) return 0;
-    for (i = 0; i < 16; i++) wave_tri[i] = (BYTE)((i < 8 ? 15 - 2 * i : 2 * i - 17) * 8);
+    for (i = 0; i < 16; i++) wave_tri[i] = (BYTE)((4 * (i < 8 ? 8 - i : i - 8) - 16) * 7);   /* 112 down to -112 and back up */
     for (d = 0; d < 2; d++) {                   /* NES noise: 15-bit LFSR, feedback from bit 1 (long) or bit 6 */
         if (!(wave_noise[d] = sys_alloc(NOISE_LEN, MEMF_CHIP))) return 0;
         lfsr = 1;
@@ -135,13 +135,15 @@ void sound_frame(void)
 {
     ULONG ticks = logic_frames - last_frame;
     UBYTE en = apu_reg[0x15], trig = apu_trig;
+    ULONG wr = apu_written;
     int n, q;
     if (!on) return;
     last_frame = logic_frames;
-    apu_trig = 0;
-    /* restarted notes */
+    apu_trig = 0; apu_written = 0;
+    /* restarted notes. A pulse period is only loaded when the game writes it: the sweep changes it in between */
     for (n = 0; n < 2; n++) {
-        pulse[n].timer = (UWORD)(apu_reg[n * 4 + 2] | ((apu_reg[n * 4 + 3] & 7) << 8));
+        if (wr & (3UL << (n * 4 + 2))) pulse[n].timer = (UWORD)(apu_reg[n * 4 + 2] | ((apu_reg[n * 4 + 3] & 7) << 8));
+        if (wr & (1UL << (n * 4 + 1))) pulse[n].sweep_reload = 1;
         if (trig & (1 << n)) { pulse[n].len = len_tab[apu_reg[n * 4 + 3] >> 3]; pulse[n].env_start = 1; }
     }
     if (trig & 4) { tri_len = len_tab[apu_reg[11] >> 3]; tri_reload = 1; }
@@ -156,7 +158,7 @@ void sound_frame(void)
     for (n = 0; n < 2; n++) {
         UBYTE r0 = apu_reg[n * 4];
         UWORD t = pulse[n].timer, vol = (r0 & 0x10) ? (r0 & 15) : pulse[n].env_vol;
-        int mute = !pulse[n].len || t < 8 || ((apu_reg[n * 4 + 1] & 0x88) == 0x80 && sweep_target(n) > 0x7ff);
+        int mute = !pulse[n].len || t < 8 || sweep_target(n) > 0x7ff;     /* the sweep mutes even when disabled */
         /* 8 samples a NES pulse period: Paula period = PAULA_CLOCK * 16 * (t + 1) / (NES_CLOCK * 8) */
         set_chan(n, wave_pulse[r0 >> 6], 4, (UWORD)((PAULA_CLOCK * 2 / 1000 * (t + 1)) / (NES_CLOCK / 1000)), mute ? 0 : (UWORD)(vol * 3));
     }

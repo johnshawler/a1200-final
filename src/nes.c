@@ -25,6 +25,7 @@ uint8_t  split_on, split_ctrl, split_chr0, split_chr1, split_fx, split_line, spl
 uint16_t split_t;
 
 uint8_t apu_reg[0x18], apu_trig;
+uint32_t apu_written;                           /* bit n: $40nn was written since the sound code last looked */
 uint8_t nes_pad;
 uint8_t pad_shift, pad_strobe;                 /* also used by src/nes68k.s */
 
@@ -202,6 +203,7 @@ void nes_write_slow(uint16_t a, uint8_t v)
             if (pad_strobe) pad_shift = nes_pad;
         } else if (a < 0x4018) {
             apu_reg[a - 0x4000] = v;
+            apu_written |= 1UL << (a - 0x4000);
             if ((a & 3) == 3 && a < 0x4010) apu_trig |= (uint8_t)(1 << ((a - 0x4000) >> 2));
             if (a == 0x4015) apu_trig |= 0x10;
         }

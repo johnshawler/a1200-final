@@ -95,15 +95,15 @@ Say the verdict in the report from the start; name the upgrade.
   stream tile columns, each tile row at y and y+240 drawing only the shown copy, border columns blank, honour
   PPUMASK's hidden left column. Tile-set-only splits: draw rows with the right tile set.
 - Sprites: cluster ≤ 64 px, 64-pixel attached pairs (15 colours), reuse channels down the screen, cache unchanged
-  clusters from the previous sprite set. Sprite-behind-background priority is not done yet.
+  clusters from the previous sprite set. Behind-background priority (with its masking quirk) and 8x16 sprites are done.
 - Sound: APU model (length, envelope, sweep, linear counter, 240 Hz sequencer) → Paula periods and volumes with
   looped one-period waveforms. DMC not done yet.
 - Develop both on the host harnesses (`tools/vhost.c`, `tools/shost.c`), then confirm on the emulator.
 
 ## 8. Not done yet (do it when a game needs it)
 
-Other mappers (UxROM, CNROM, MMC3 with its scanline IRQ); scroll changes at a split; sprite-behind-background;
-DMC samples; 8×16 sprites in `video.c` (the reference handles them); lag (cycle budgets); a 68030 bench.
+Other mappers (UxROM, CNROM, MMC3 with its scanline IRQ); scroll changes at a split; DMC samples; the 8
+sprites per line limit; lag (cycle budgets); a 68030 bench.
 
 ## 9. Lessons log (append one entry per port, newest last)
 
@@ -118,3 +118,15 @@ sections above if a lesson is general.
 - Biggest wins were I/O plumbing found by the profiler (OAM DMA, controller, MMC1, PPU writes), not game logic.
 - Next time: measure the load on day one (it decided the outcome); build the 1 kHz profiler before optimising
   anything; don't trust static cost estimates; write the display on the host harness first.
+- **Found by the first person who played it** (none showed up in the self-playing bench):
+  - It locked up at the 1-player "change orders" screen: code only reached by human play had never been
+    traced. Fixes: read jump tables completely (entries that decode as code), recognise `LDA #bank; JSR
+    <bank switch>; JSR $8xxx` statically (`BANK_SWITCH` in the game file), and run many long random 1P/2P
+    sessions (`tools/flow/mk1p.py`) through the host translation until none stops, tracing each that does.
+    **Do this before handing a port over**, and check the new paths with `tools/nesref/verify.c` (INPUT=...).
+  - The bat-toss screen used **8x16 sprites** and the **behind-background priority quirk** (a low-numbered
+    sprite behind solid background also hides the sprites above it): both are now in `src/video.c`.
+  - Selection sounds use the pulse **sweep**: the period must only be loaded when the game writes it, the
+    sweep restarts on a $4001/$4005 write, and overflow mutes even when the sweep is disabled.
+  - The triangle waveform table was wrong (an octave-heavy shape): check waveforms against a reference WAV.
+  - Compare against the real thing with the *same input*: comparing runs with different input wasted time.

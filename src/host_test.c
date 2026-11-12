@@ -14,6 +14,35 @@ void host_render(const char *path);
 
 uint8_t nes_prg_data[0x20000], nes_chr_data[0x20000];
 
+/* INPUT=file: play this script instead of the bench input (tools/nesref format: "first last BUTTONS") */
+static struct { unsigned a, b; unsigned short bits; } script[4096]; static int nscript = -1;
+static unsigned short input_at(unsigned t)
+{
+    unsigned short r = 0; int i;
+    if (nscript < 0) {
+        FILE *f = getenv("INPUT") ? fopen(getenv("INPUT"), "r") : 0; char l[256];
+        nscript = 0;
+        while (f && fgets(l, sizeof l, f) && nscript < 4096) {
+            char *p = l, *tok; unsigned a, b;
+            if (sscanf(l, "%u %u", &a, &b) != 2) continue;
+            strtol(p, &p, 10); strtol(p, &p, 10);
+            script[nscript].a = a; script[nscript].b = b; script[nscript].bits = 0;
+            for (tok = strtok(p, " \t\r\n+"); tok; tok = strtok(0, " \t\r\n+")) {
+                if (!strcmp(tok, "A")) script[nscript].bits |= IN_A; else if (!strcmp(tok, "B")) script[nscript].bits |= IN_B;
+                else if (!strcmp(tok, "START")) script[nscript].bits |= IN_START; else if (!strcmp(tok, "SELECT")) script[nscript].bits |= IN_SELECT;
+                else if (!strcmp(tok, "UP")) script[nscript].bits |= IN_UP; else if (!strcmp(tok, "DOWN")) script[nscript].bits |= IN_DOWN;
+                else if (!strcmp(tok, "LEFT")) script[nscript].bits |= IN_LEFT; else if (!strcmp(tok, "RIGHT")) script[nscript].bits |= IN_RIGHT;
+            }
+            nscript++;
+        }
+        if (f) fclose(f);
+        if (!f) nscript = -2;
+    }
+    if (nscript == -2) return game_bench_input(t);
+    for (i = 0; i < nscript; i++) if (t >= script[i].a && t <= script[i].b) r |= script[i].bits;
+    return r;
+}
+
 static void load(const char *name, uint8_t *dst)
 {
     FILE *f = fopen(name, "rb");
@@ -32,13 +61,13 @@ int main(int argc, char **argv)
     load("assets/chr.bin", nes_chr_data);
     game_init();
     for (t = 0; t < n; t++) {
-        game_tick(game_bench_input(t));
+        game_tick(input_at(t));
         if (verbose && (t + 1) % 100 == 0) printf("tick %u checksum %08x frames %u\n", t + 1, (unsigned)game_checksum(), (unsigned)logic_frames);
         if (ramlog) fwrite(nes_ram, 1, sizeof nes_ram, ramlog);
         snprintf(key, sizeof key, ",%u,", t + 1);
         if (dumps) { char list[4096]; snprintf(list, sizeof list, ",%s,", dumps); if (strstr(list, key)) { snprintf(name, sizeof name, "host_%05u.ppm", t + 1); host_render(name); } }
     }
-    if (nes_fatal_why) fprintf(stderr, "STOPPED: reason %d at %04x\n", nes_fatal_why, nes_fatal_pc);
+    if (nes_fatal_why) fprintf(stderr, "STOPPED: reason %d at %04x (bank %d)\n", nes_fatal_why, nes_fatal_pc, nes_bank);
     if (ramlog) fclose(ramlog);
     printf("ticks=%u checksum=%08x\n", n, (unsigned)game_checksum());
     return 0;

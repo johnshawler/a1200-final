@@ -64,6 +64,7 @@ extern uint8_t  split_seen;                     /* a split happened in the NMI t
 /* APU: the register file, and which channels were (re)started this frame. The Amiga side plays it. */
 extern uint8_t apu_reg[0x18];
 extern uint8_t apu_trig;
+extern uint32_t apu_written;            /* bit n: $40nn written since last looked (sweep, period writes) */
 
 /* Controller: buttons in NES order (bit 0 A, 1 B, 2 Select, 3 Start, 4 Up, 5 Down, 6 Left, 7 Right) */
 extern uint8_t nes_pad;

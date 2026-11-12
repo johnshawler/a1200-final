@@ -1,6 +1,8 @@
 """llb.py - what the translator needs to know about Little League Baseball: Championship Series (NES, MMC1)
 that it cannot find out by itself. Loaded by tools/recomp.py (--game llb).
 
+  BANK_SWITCH    subroutines that switch the $8000 bank to the value in A: a constant loaded just before the call
+                 tells the translator which bank a following call into $8000-$BFFF reaches.
   NORETURN       subroutines that pop their own return address (jump-table dispatchers: a table of words
                  follows the JSR). Find them in the traces: 'I' targets reached from one JMP (ind) after PLA PLA.
   HLE            hand-written 68k equivalents of hot 6502 routines, keyed (bank, address), 7 = the fixed bank.
@@ -11,6 +13,7 @@ that it cannot find out by itself. Loaded by tools/recomp.py (--game llb).
 See LEARNINGS.md and PLAYBOOK-NES.md for how these were found (1 kHz profiler, field-play window).
 """
 
+BANK_SWITCH = {0xc14e, 0xc150}  # subroutines that map the 16 KB bank given in A at $8000 (LDA #n / JSR here / JSR $8xxx)
 NORETURN = {0xc232}             # jump-table dispatcher: pops its return address, a table of words follows the JSR
 
 # Hand-written equivalents of hot 6502 routines (exact: same RAM, same stack bytes left below S, same
