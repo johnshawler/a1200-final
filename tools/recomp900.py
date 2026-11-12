@@ -148,10 +148,77 @@ def wait_kind(aset, lo, hi):
 def fname(a): return 'F_%06x' % a
 stats = collections.Counter()
 
+ALU = {'add': 0, 'adc': 1, 'sub': 2, 'sbc': 3, 'and': 4, 'xor': 5, 'or': 6, 'cp': 7}
+SHIFT = {'rlc': 0, 'rrc': 1, 'rl': 2, 'rr': 3, 'sla': 4, 'sra': 5, 'sll': 6, 'srl': 7}
+
+def ea_code(o):
+    """(statements that must run first, C expression of the address) of a memory operand. The interpreter moves
+    an address register of (-r) and (r+) before the operation, so the statements come first here too."""
+    m = o[1]
+    if m in ('abs', 'pcrel'): return '', '0x%06xu' % o[2]
+    if m == 'ind': return '', 'cpu_getr(4, 0x%02x)' % o[2]
+    if m == 'disp': return '', '(cpu_getr(4, 0x%02x) + (uint32_t)(%d))' % (o[2], o[3])
+    if m == 'idx': return '', '(cpu_getr(4, 0x%02x) + (uint32_t)(int%d_t)cpu_getr(%d, 0x%02x))' % (o[2], o[4] * 8, o[4], o[3])
+    if m == 'dec': return 'ea = cpu_getr(4, 0x%02x) - %d; cpu_setr(4, 0x%02x, ea);' % (o[2], o[3], o[2]), 'ea'
+    if m == 'inc': return 'ea = cpu_getr(4, 0x%02x); cpu_setr(4, 0x%02x, ea + %d);' % (o[2], o[2], o[3]), 'ea'
+    raise ValueError(m)
+
 def native(d):
-    """C statement for a non-flow instruction, or None: then it is run by the interpreter's step on the spot"""
+    """C statements for a non-flow instruction, or None: then it is run by the interpreter's step on the spot.
+    Every form here mirrors the case of the same instruction in src/ngpc/cpu900.h."""
     if not NATIVE: return None
-    return None                                             # (native instruction forms are added below this stage)
+    m, ops, s = d.mnem, d.ops, d.size
+    kinds = tuple(o[0] for o in ops)
+    if any(k in ('sr', 'f', 'f2', 'cr', 'cc', 'a') for k in kinds): return None
+    pre = []
+    def src(o):                                             # value of a source operand
+        if o[0] == 'r': return 'cpu_getr(%d, 0x%02x)' % (o[1], o[2])
+        if o[0] == 'i': return '0x%xu' % (o[1] & 0xffffffff)
+        st, e = ea_code(o)
+        if st: pre.append(st)
+        return 'cpu_rd(%d, %s)' % (s, e)
+    def addr(o):                                            # address of a memory operand, in the temporary ea
+        st, e = ea_code(o)
+        if st: pre.append(st)
+        else: pre.append('ea = %s;' % e)
+        return 'ea'
+    def done(text): return ' '.join(pre + [text])
+    if m == 'ld' and kinds in (('r', 'r'), ('r', 'i'), ('r', 'm')):
+        v = src(ops[1]); return done('cpu_setr(%d, 0x%02x, %s);' % (ops[0][1], ops[0][2], v))
+    if m == 'ld' and kinds in (('m', 'r'), ('m', 'i')):
+        a = addr(ops[0]); return done('cpu_wr(%d, %s, %s);' % (s, a, src(ops[1])))
+    if m == 'ld' and kinds == ('m', 'm'):                   # LD (nn),(mem) and LD (mem),(nn): one side is a plain address
+        if ops[0][1] == 'abs': v = src(ops[1]); return done('cpu_wr(%d, 0x%06xu, %s);' % (s, ops[0][2], v))
+        a = addr(ops[0]); return done('cpu_wr(%d, %s, cpu_rd(%d, 0x%06xu));' % (s, a, s, ops[1][2]))
+    if m == 'lda' and kinds == ('r', 'm') and ops[1][1] not in ('dec', 'inc'):
+        return 'cpu_setr(%d, 0x%02x, %s);' % (ops[0][1], ops[0][2], ea_code(ops[1])[1])
+    if m == 'push' and kinds in (('r',), ('i',)): return 'cpu_push(%d, %s);' % (s if kinds == ('i',) else ops[0][1], src(ops[0]))
+    if m == 'push' and kinds == ('m',): v = src(ops[0]); return done('cpu_push(%d, %s);' % (s, v))
+    if m == 'pop' and kinds == ('r',): return 'cpu_setr(%d, 0x%02x, cpu_pop(%d));' % (ops[0][1], ops[0][2], ops[0][1])
+    if m in ALU and kinds in (('r', 'r'), ('r', 'i'), ('r', 'm')):
+        v = src(ops[1]); r = (ops[0][1], ops[0][2])
+        call = 'cpu_alu(%d, %d, cpu_getr(%d, 0x%02x), %s)' % (ALU[m], s, r[0], r[1], v)
+        return done(call + ';' if m == 'cp' else 'cpu_setr(%d, 0x%02x, %s);' % (r[0], r[1], call))
+    if m in ALU and kinds in (('m', 'r'), ('m', 'i')):
+        a = addr(ops[0])
+        call = 'cpu_alu(%d, %d, cpu_rd(%d, %s), %s)' % (ALU[m], s, s, a, src(ops[1]))
+        return done(call + ';' if m == 'cp' else 't = %s; cpu_wr(%d, %s, t);' % (call, s, a))
+    if m in ('inc', 'dec') and kinds == ('i', 'r'):
+        sz, c, n = ops[1][1], ops[1][2], ops[0][1]
+        if sz == 1: return 'cpu_setr(1, 0x%02x, cpu_incdec(%d, 1, cpu_getr(1, 0x%02x), %d));' % (c, m == 'dec', c, n)
+        return 'cpu_setr(%d, 0x%02x, cpu_getr(%d, 0x%02x) %s %d);' % (sz, c, sz, c, '-' if m == 'dec' else '+', n)
+    if m in ('inc', 'dec') and kinds == ('i', 'm'):
+        a = addr(ops[1]); return done('t = cpu_incdec(%d, %d, cpu_rd(%d, %s), %d); cpu_wr(%d, %s, t);' % (m == 'dec', s, s, a, ops[0][1], s, a))
+    if m in SHIFT and kinds == ('i', 'r'):                  # count 0 means 16; the count is known here
+        n = ops[0][1] or 16; sz, c = ops[1][1], ops[1][2]
+        return 'cpu_setr(%d, 0x%02x, cpu_shift(%d, %d, cpu_getr(%d, 0x%02x), %d));' % (sz, c, SHIFT[m], sz, sz, c, n)
+    if m in ('extz', 'exts') and kinds == ('r',):
+        sz, c = ops[0][1], ops[0][2]; half = 'uint%d_t' % (sz * 4) if m == 'extz' else 'int%d_t' % (sz * 4)
+        return 'cpu_setr(%d, 0x%02x, (uint32_t)(%s)cpu_getr(%d, 0x%02x));' % (sz, c, half, sz, c)
+    if m == 'ex' and kinds == ('r', 'r'):
+        a, b = ops
+        return 't = cpu_getr(%d, 0x%02x); cpu_setr(%d, 0x%02x, cpu_getr(%d, 0x%02x)); cpu_setr(%d, 0x%02x, t);' % (a[1], a[2], a[1], a[2], b[1], b[2], b[1], b[2], )
+    return None
 
 def gen_function(entry):
     addrs = body(entry)
@@ -189,13 +256,15 @@ def gen_function(entry):
             if d.ops[0][1] == 1: L.append('ngp_bios_call(cpu.bank[3][0] >> 8 & 0xff);')
             else: L.append('ngp_fatal(0x%06x, 1); return 0;' % a); ft = False
         elif kind == 'ret':
-            if cc is None: L.append(step + ' return cpu.pc;'); ft = False
-            else: L.append('if (%s) { %s return cpu.pc; }' % (cond, step))
+            pop = 'return cpu_pop(4) & 0xffffff;' if d.mnem == 'ret' and NATIVE else step + ' return cpu.pc;'    # RETD and RETI: by the step
+            if cc is None: L.append(pop); ft = False
+            else: L.append('if (%s) { %s }' % (cond, pop))
         elif kind in ('jump', 'branch'):
-            if d.mnem == 'djnz':                                # the interpreter counts, the pc tells the outcome
-                L.append(step)
-                if a in waits: L.append('if (cpu.pc != 0x%06x) { %s(0x%06x); %s }' % (fall, 'ngp_wait' if waits[a] == 1 else 'ngp_poll', target, goto(target)))
-                else: L.append('if (cpu.pc != 0x%06x) %s' % (fall, goto(target)))
+            if d.mnem == 'djnz':
+                sz, c = d.ops[0][1], d.ops[0][2]
+                L.append('t = (cpu_getr(%d, 0x%02x) - 1) & 0x%x; cpu_setr(%d, 0x%02x, t);' % (sz, c, (1 << (8 * sz)) - 1, sz, c))
+                if a in waits: L.append('if (t) { %s(0x%06x); %s }' % ('ngp_wait' if waits[a] == 1 else 'ngp_poll', target, goto(target)))
+                else: L.append('if (t) %s' % goto(target))
             elif target is not None:
                 if a in waits:
                     L.append('if (%s) { %s(0x%06x); %s }' % (cond, 'ngp_wait' if waits[a] == 1 else 'ngp_poll', target, goto(target)))
@@ -216,7 +285,7 @@ def gen_function(entry):
                 L.append('%s if (cpu.pc != 0x%06x) { r = ngp_dispatch(cpu.pc); if (r != 0x%06x) return r; }' % (step, fall, ret))
         if ft and nxt != fall: L.append(goto(fall))
         lines.append((a, L, T.fmt(d)))
-    out = ['uint32_t %s(void)\n{\n    uint32_t r; (void)r;' % fname(entry)]
+    out = ['uint32_t %s(void)\n{\n    uint32_t r, t, ea; (void)r; (void)t; (void)ea;' % fname(entry)]
     if addrs and addrs[0] != entry: labels.add(entry); out.append('    goto L_%06x;' % entry)
     for a, L, text in lines:
         out.append('%s%s%s' % ('L_%06x: ' % a if a in labels else '    ', ' '.join(L).ljust(60), '   /* %06x %s */' % (a, text)))
