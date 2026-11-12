@@ -14,10 +14,11 @@
  *
  * What it models: the CPU with its timing, work RAM, the K2GE with scanline timing and a picture per frame,
  * the four 8-bit timers, the interrupt controller with its priorities, the BIOS's system calls and its
- * per-frame work written in C (the real BIOS code is not run), the controller.
- * What it does not model: the Z80 sound processor and the sound chip, micro DMA, the serial port, flash writes
- * (they succeed and are forgotten), the mono mode of games without colour. A game that needs one of these says
- * so in the summary this program prints at the end ("uses:" line).
+ * per-frame work written in C (the real BIOS code is not run), the controller, and the Z80 sound processor
+ * with its shared RAM, command port and interrupts (games wait for answers of their sound program).
+ * What it does not model: the sound chip's output (writes are counted, nothing is played), micro DMA, the
+ * serial port, flash writes (they succeed and are forgotten), the mono mode of games without colour. What a
+ * game touched of these is in the summary this program prints at the end ("uses:" line).
  *
  * Flow file lines (all addresses hex):  E pc  = an instruction was executed at pc;  I to from  = a jump or call
  * through a register or memory reached "to";  V n to  = interrupt vector n was taken to "to";  B n  = BIOS system
@@ -64,8 +65,13 @@ static const uint32_t sys_addr[27] = {
     0xff2d4e, 0xff2d6c, 0xff2d85 };
 
 /* ---- timers and interrupts ---- */
-static uint8_t tcount[4]; static int tclock[4]; static int h_int, t0_tick, t2_tick;
+static uint8_t tcount[4]; static uint32_t tpre; static int tff3;
+static int z80_on, z80_budget; static long z80_instr, psg_writes;
 static uint8_t ipend[16];               /* by the number of the vector in RAM: 5 VBL, 6 Z80, 7-10 timers 0-3 */
+
+static void set_tff3(int v);
+static void z80_start(void);
+static void z80_nmi(void);
 
 static uint8_t mem_r8(uint32_t a)
 {
@@ -99,14 +105,16 @@ static void mem_w8(uint32_t a, uint8_t v)
     if (a < 0x100) {
         switch (a) {
         case 0x20: if (!(v & 1)) tcount[0] = 0; if (!(v & 2)) tcount[1] = 0; if (!(v & 4)) tcount[2] = 0; if (!(v & 8)) tcount[3] = 0; break;
+        case 0x25: if ((v & 0xc0) == 0x00) set_tff3(!tff3); else if ((v & 0xc0) == 0x40) set_tff3(1); else if ((v & 0xc0) == 0x80) set_tff3(0); break;
         case 0x71: if (!(v & 0x08)) ipend[5] = 0; if (!(v & 0x80)) ipend[6] = 0; break;
         case 0x73: if (!(v & 0x08)) ipend[7] = 0; if (!(v & 0x80)) ipend[8] = 0; break;
         case 0x74: if (!(v & 0x08)) ipend[9] = 0; if (!(v & 0x80)) ipend[10] = 0; break;
         case 0x7c: case 0x7d: case 0x7e: case 0x7f: if (v) uses |= USE_DMA; break;
         case 0x50: uses |= USE_SERIAL; break;
-        case 0xa0: case 0xa1: uses |= USE_PSG; break;
+        case 0xa0: case 0xa1: uses |= USE_PSG; psg_writes++; break;
         case 0xa2: case 0xa3: if (v != 0x80 && v) uses |= USE_DAC; break;
-        case 0xb9: if (v == 0x55) uses |= USE_Z80; break;
+        case 0xb9: if (v == 0x55) { uses |= USE_Z80; z80_on = 1; z80_start(); } else if (v == 0xaa) z80_on = 0; break;
+        case 0xba: z80_nmi(); break;
         }
         io[a] = v; return;
     }
@@ -122,6 +130,29 @@ static void mem_w8(uint32_t a, uint8_t v)
 }
 
 #include "cpu900.h"
+
+/* ---- the Z80 sound processor: 4 KB shared with the main CPU at 0x7000, the sound chip, a command byte ---- */
+static uint8_t z80_mr(uint16_t a)
+{
+    if (a < 0x1000) return ram[0x3000 + a];
+    if (a == 0x8000) return io[0xbc];
+    return 0xff;
+}
+static void z80_mw(uint16_t a, uint8_t v)
+{
+    if (a < 0x1000) ram[0x3000 + a] = v;
+    else if (a == 0x4000 || a == 0x4001) { uses |= USE_PSG; psg_writes++; }
+    else if (a == 0x8000) io[0xbc] = v;
+    else if (a == 0xc000) ipend[6] = 1;                 /* interrupt to the main CPU (INT5) */
+}
+static uint8_t z80_in(uint16_t port);
+static void z80_out(uint16_t port, uint8_t v);
+#include "z80.h"
+static uint8_t z80_in(uint16_t port) { (void)port; return 0xff; }
+static void z80_out(uint16_t port, uint8_t v) { (void)port; (void)v; z80.irq_line = 0; }   /* any port write ends its interrupt */
+static void z80_start(void) { z80_reset(); z80_budget = 0; }
+static void z80_nmi(void) { z80.nmi_pending = 1; }
+static void set_tff3(int v) { if (v && !tff3) z80.irq_line = 1; tff3 = v; }        /* timer 3's output is the Z80's interrupt */
 
 static void flow(char kind, uint32_t a, uint32_t b)
 {
@@ -186,41 +217,31 @@ static void check_irq(void)
     }
 }
 
+static void timer_tick(int n)                           /* one clock for timer n; a match gives its interrupt */
+{
+    static const uint8_t reg[4] = { 0x22, 0x23, 0x26, 0x27 };
+    if (++tcount[n] != io[reg[n]]) return;
+    tcount[n] = 0;
+    ipend[7 + n] = 1;
+    if (n == 0 && (io[0x20] & 2) && !(io[0x24] & 0x0c)) timer_tick(1);          /* timer 1 counts timer 0's matches */
+    if (n == 2 && (io[0x20] & 8) && !(io[0x28] & 0x0c)) timer_tick(3);
+    if (n == 3 && (io[0x25] & 0x20)) set_tff3(!tff3);
+}
 static void timers(int states)
 {
-    static const int rate01[4] = { 0, 256, 1024, 4096 }, rate1[4] = { 0, 256, 4096, 65536 }, rate2[4] = { 0, 128, 1024, 4096 };
-    int i, m;
-    for (i = 0; i < 4; i++) tclock[i] += states;
-    t0_tick = 0;
-    if (io[0x20] & 1) {
-        m = io[0x24] & 3;
-        if (m == 0) { if (h_int) { tcount[0]++; tclock[0] = 0; h_int = 0; } }
-        else while (tclock[0] >= rate01[m]) { tcount[0]++; tclock[0] -= rate01[m]; }
-        if (io[0x22] && tcount[0] >= io[0x22]) { tcount[0] = 0; t0_tick = 1; ipend[7] = 1; }
-    }
-    if (io[0x20] & 2) {
-        m = (io[0x24] >> 2) & 3;
-        if (m == 0) { if (t0_tick) { tcount[1]++; tclock[1] = 0; } }
-        else while (tclock[1] >= rate1[m]) { tcount[1]++; tclock[1] -= rate1[m]; }
-        if (io[0x23] && tcount[1] >= io[0x23]) { tcount[1] = 0; ipend[8] = 1; }
-    }
-    t2_tick = 0;
-    if (io[0x20] & 4) {
-        m = io[0x28] & 3;
-        if (m) while (tclock[2] >= rate2[m]) { tcount[2]++; tclock[2] -= rate2[m]; }
-        if (io[0x26] && tcount[2] >= io[0x26]) { tcount[2] = 0; t2_tick = 1; ipend[9] = 1; }
-    }
-    if (io[0x20] & 8) {
-        m = (io[0x28] >> 2) & 3;
-        if (m == 0) { if (t2_tick) { tcount[3]++; tclock[3] = 0; } }
-        else while (tclock[3] >= rate1[m]) { tcount[3]++; tclock[3] -= rate1[m]; }
-        if (io[0x27] && tcount[3] >= io[0x27]) { tcount[3] = 0; ipend[10] = 1; }      /* also the Z80's interrupt */
-    }
+    static const uint8_t sh0[4] = { 0, 7, 9, 11 }, sh1[4] = { 0, 7, 11, 15 }, sh2[4] = { 7, 7, 9, 11 };
+    uint32_t old = tpre; int n, m;
+    if (!(io[0x20] & 0x80)) return;                     /* the prescaler is stopped */
+    tpre += (uint32_t)states;
+    if ((io[0x20] & 1) && (m = io[0x24] & 3) != 0) for (n = (int)((tpre >> sh0[m]) - (old >> sh0[m])); n > 0; n--) timer_tick(0);
+    if ((io[0x20] & 2) && (m = (io[0x24] >> 2) & 3) != 0) for (n = (int)((tpre >> sh1[m]) - (old >> sh1[m])); n > 0; n--) timer_tick(1);
+    if (io[0x20] & 4) { m = io[0x28] & 3; for (n = (int)((tpre >> sh2[m]) - (old >> sh2[m])); n > 0; n--) timer_tick(2); }
+    if ((io[0x20] & 8) && (m = (io[0x28] >> 2) & 3) != 0) for (n = (int)((tpre >> sh1[m]) - (old >> sh1[m])); n > 0; n--) timer_tick(3);
 }
 
 static void end_of_line(void)
 {
-    if ((raster < K2GE_H_LINES - 1 || raster == LINES - 1) && (vid[0] & 0x40)) h_int = 1;
+    if ((raster < K2GE_H_LINES - 1 || raster == LINES - 1) && (vid[0] & 0x40) && (io[0x20] & 1) && !(io[0x24] & 3)) timer_tick(0);   /* horizontal blank clocks timer 0 */
     if (raster < K2GE_H_LINES) k2ge_line(vid, raster, fb[raster]);
     raster++;
     if (raster == K2GE_H_LINES) {                       /* vertical blank: the BIOS reads the controller, then the game's handler */
@@ -303,6 +324,7 @@ static void run_frame(void)
         line_states += st;
         if (line_states >= LINE_STATES) { line_states -= LINE_STATES; end_of_line(); if (raster == 0) done = 1; }
         timers(st);
+        if (z80_on) { z80_budget += st; while (z80_budget > 0) { z80_budget -= 2 * z80_step(); z80_instr++; } }
     }
 }
 
@@ -381,7 +403,7 @@ int main(int argc, char **argv)
     }
     if (rf) fclose(rf);
     if (flowf) fclose(flowf);
-    fprintf(stderr, "%d frames, %ld instructions. BIOS calls used:", frames, total_instr);
+    fprintf(stderr, "%d frames, %ld instructions, %ld Z80 instructions, %ld sound chip writes. BIOS calls used:", frames, total_instr, z80_instr, psg_writes);
     for (i = 0; i < 32; i++) if (bios_used & (1u << i)) fprintf(stderr, " %d", i);
     fprintf(stderr, "\nuses:%s%s%s%s%s%s%s%s\n", uses & USE_Z80 ? " Z80(sound program)" : "", uses & USE_PSG ? " sound-chip" : "", uses & USE_DAC ? " DAC" : "",
             uses & USE_DMA ? " micro-DMA" : "", uses & USE_SERIAL ? " serial" : "", uses & USE_FLASH ? " flash-writes" : "", uses & USE_MONO ? " mono-mode" : "", uses ? "" : " nothing that is not modelled");
