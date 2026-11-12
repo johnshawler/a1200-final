@@ -8,8 +8,8 @@
 #define IN_LEFT   2
 #define IN_DOWN   4
 #define IN_UP     8
-#define IN_A      16            /* fire */
-#define IN_B      32            /* second fire */
+#define IN_A      32            /* second fire (joystick button 2) = NES A */
+#define IN_B      16            /* fire (joystick button 1) = NES B */
 #define IN_START  64
 #define IN_SELECT 128
 

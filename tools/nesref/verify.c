@@ -127,11 +127,11 @@ static unsigned short bench_input(unsigned int t)      /* copy of game_bench_inp
     /* BENCH INPUT BEGIN (per game: tools/new_port.sh resets it) */
     if (t >= 100 && t <= 105) return 64;
     if (t >= 200 && t <= 205) return 4;
-    if (t >= 250 && t <= 255) return 16;
+    if (t >= 250 && t <= 255) return 32;
     if (t >= 330 && t <= 335) return 4;
     if (t >= 360 && t <= 365) return 4;
-    if (t >= 400 && t <= 405) return 16;
-    if (t >= 500 && (t & 127) < 4) return 16;
+    if (t >= 400 && t <= 405) return 32;
+    if (t >= 500 && (t & 127) < 4) return 32;
     /* BENCH INPUT END */
     return 0;
 }
@@ -149,7 +149,7 @@ static unsigned short input_at(unsigned t)
             strtol(p, &p, 10); strtol(p, &p, 10);
             script[nscript].a = a; script[nscript].b = b; script[nscript].bits = 0;
             for (tok = strtok(p, " \t\r\n+"); tok; tok = strtok(0, " \t\r\n+")) {
-                if (!strcmp(tok, "A")) script[nscript].bits |= 16; else if (!strcmp(tok, "B")) script[nscript].bits |= 32;
+                if (!strcmp(tok, "A")) script[nscript].bits |= 32; else if (!strcmp(tok, "B")) script[nscript].bits |= 16;
                 else if (!strcmp(tok, "START")) script[nscript].bits |= 64; else if (!strcmp(tok, "SELECT")) script[nscript].bits |= 128;
                 else if (!strcmp(tok, "UP")) script[nscript].bits |= 8; else if (!strcmp(tok, "DOWN")) script[nscript].bits |= 4;
                 else if (!strcmp(tok, "LEFT")) script[nscript].bits |= 2; else if (!strcmp(tok, "RIGHT")) script[nscript].bits |= 1;
@@ -174,7 +174,7 @@ static void load(const char *name, uint8_t *dst)
 static uint8_t pad_of(unsigned short in)
 {
     uint8_t p = 0;
-    if (in & 16) p |= 1; if (in & 32) p |= 2; if (in & 128) p |= 4; if (in & 64) p |= 8;
+    if (in & 32) p |= 1; if (in & 16) p |= 2; if (in & 128) p |= 4; if (in & 64) p |= 8;
     if (in & 8) p |= 0x10; if (in & 4) p |= 0x20; if (in & 2) p |= 0x40; if (in & 1) p |= 0x80;
     return p;
 }
