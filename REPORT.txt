@@ -37,4 +37,4 @@ Not done, not tested:  real A1200 hardware, a Commodore Kickstart ROM (the user 
 How to run:            put the ROM at original/llb.nes, run tools/make_assets.sh, then tools/port.sh (or tools/build.sh
                        with the SOURCES line of port.conf). Copy dist/llb to the Amiga and run "llb" from a Shell
                        ("llb bench 3000" for the proof run). Joystick in port 2: stick = pad, fire = A, second fire = B.
-                       Keys: cursor keys = pad, Z = A (button 1), X or Alt = B (button 2), Space = Select, Return/Enter = Start, Esc = quit.
+                       Keys: cursor keys = pad, X = A, Z or Alt = B, Space = Select, Return/Enter = Start, Esc = quit.
