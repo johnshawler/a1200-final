@@ -9,6 +9,8 @@ Your instructions are in `BRIEF.md`. Read all of it before you do anything else,
 - Run `tools/setup.sh` once. Describe your port in `port.conf`. Then `tools/port.sh` builds it, benches it on
   the emulated stock A1200, runs your host test and checks the gates. The port is done only when it prints
   `PASS`. Never claim a frame rate that `tools/port.sh` did not print.
+- Work in the order of `PIPELINE.md` (milestones reprioritised from what this port found; its backlog lists the
+  next items for this port). Read `LEARNINGS.md` before changing the translator or the display.
 - Keep `NOTES.md`: one line for every place the brief was unclear, wrong or missing something.
 - When you finish, or are stuck at a gate after real attempts, write the PORT REPORT in the brief's format
   to `REPORT.txt`.
