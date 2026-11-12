@@ -9,8 +9,8 @@
 
 #define RD16(p) ((uint16_t)((p)[0] | (p)[1] << 8))
 
-static void tile_row(const uint8_t *v, uint16_t *out, uint8_t *z, int x, unsigned tile, int row, int mirror,
-                     const uint8_t *pal, int depth, int lo, int hi, int neg)
+static void tile_row(const uint8_t *v, uint8_t *out, uint8_t *z, int x, unsigned tile, int row, int mirror,
+                     unsigned pal, int depth, int lo, int hi)
 {
     unsigned bits = RD16(v + 0x2000 + tile * 16 + row * 2);         /* leftmost pixel in bits 15-14 */
     int i;
@@ -18,14 +18,14 @@ static void tile_row(const uint8_t *v, uint16_t *out, uint8_t *z, int x, unsigne
         int px = x + i, c = mirror ? (bits >> (i * 2)) & 3 : (bits >> ((7 - i) * 2)) & 3;
         if (!c || px < lo || px > hi || depth <= z[px]) continue;
         z[px] = (uint8_t)depth;
-        out[px] = (uint16_t)((neg ? ~RD16(pal + c * 2) : RD16(pal + c * 2)) & 0x0fff);
+        out[px] = (uint8_t)(pal + c);
     }
 }
 
-static void plane(const uint8_t *v, uint16_t *out, uint8_t *z, int line, int which, int depth, int lo, int hi, int neg)
+static void plane(const uint8_t *v, uint8_t *out, uint8_t *z, int line, int which, int depth, int lo, int hi)
 {
     const uint8_t *map = v + (which ? 0x1800 : 0x1000);             /* 0x9000 and 0x9800: 32 x 32 words */
-    const uint8_t *pal = v + (which ? 0x0300 : 0x0280);             /* 0x8280 and 0x8300: 16 palettes of 4 */
+    unsigned pal = which ? 128 : 64;                                /* 0x8280 and 0x8300: 16 palettes of 4 */
     unsigned sx = v[which ? 0x34 : 0x32], sy = v[which ? 0x35 : 0x33];
     unsigned y = (line + sy) & 255, row = y & 7;
     int tx;
@@ -34,23 +34,22 @@ static void plane(const uint8_t *v, uint16_t *out, uint8_t *z, int line, int whi
         int x = (tx * 8 - sx) & 255;
         if (x > 248) x -= 256;
         if (x >= K2GE_W) continue;
-        tile_row(v, out, z, x, e & 0x1ff, (e & 0x4000) ? 7 - row : row, e & 0x8000, pal + ((e >> 9) & 15) * 8, depth, lo, hi, neg);
+        tile_row(v, out, z, x, e & 0x1ff, (e & 0x4000) ? 7 - row : row, e & 0x8000, pal + ((e >> 9) & 15) * 4, depth, lo, hi);
     }
 }
 
-void k2ge_line(const uint8_t *v, int line, uint16_t *out)
+void k2ge_line_idx(const uint8_t *v, int line, uint8_t *out)
 {
-    int winx = v[2], winy = v[3], winw = v[4], winh = v[5], neg = v[0x12] & 0x80, x, i;
+    int winx = v[2], winy = v[3], winw = v[4], winh = v[5], x, i;
     int lo = winx, hi = (winx + winw < K2GE_W ? winx + winw : K2GE_W) - 1;
-    unsigned edge = RD16(v + 0x03f0 + (v[0x12] & 7) * 2), back = RD16(v + 0x03e0 + (v[0x118] & 7) * 2);
+    unsigned edge = 0xf8 + (v[0x12] & 7), back = 0xf0 + (v[0x118] & 7);    /* window palette 0x83F0, background palette 0x83E0 */
     uint8_t z[K2GE_W];
     int lastx = 0, lasty = 0;
-    if (neg) { edge = ~edge; back = ~back; }
-    for (x = 0; x < K2GE_W; x++) { out[x] = (uint16_t)(edge & 0x0fff); z[x] = 0; }
+    for (x = 0; x < K2GE_W; x++) { out[x] = (uint8_t)edge; z[x] = 0; }
     if (line < winy || line >= winy + winh) return;                 /* above or below the window */
-    for (x = lo; x <= hi; x++) out[x] = (uint16_t)(back & 0x0fff);
-    if (v[0x30] & 0x80) { plane(v, out, z, line, 0, 3, lo, hi, neg); plane(v, out, z, line, 1, 5, lo, hi, neg); }
-    else                { plane(v, out, z, line, 1, 3, lo, hi, neg); plane(v, out, z, line, 0, 5, lo, hi, neg); }
+    for (x = lo; x <= hi; x++) out[x] = (uint8_t)back;
+    if (v[0x30] & 0x80) { plane(v, out, z, line, 0, 3, lo, hi); plane(v, out, z, line, 1, 5, lo, hi); }
+    else                { plane(v, out, z, line, 1, 3, lo, hi); plane(v, out, z, line, 0, 5, lo, hi); }
     for (i = 0; i < 64; i++) {                                      /* sprites: 0x8800, 4 bytes each */
         const uint8_t *s = v + 0x0800 + i * 4;
         unsigned e = RD16(s);
@@ -64,7 +63,14 @@ void k2ge_line(const uint8_t *v, int line, uint16_t *out)
         if (sy > 248 && sy < 256) sy -= 256; else sy &= 255;
         if (line < sy || line > sy + 7) continue;
         row = line - sy;
-        tile_row(v, out, z, sx, e & 0x1ff, (e & 0x4000) ? 7 - row : row, e & 0x8000, v + 0x0200 + (v[0x0c00 + i] & 15) * 8,
-                 pr * 2, lo, hi, neg);
+        tile_row(v, out, z, sx, e & 0x1ff, (e & 0x4000) ? 7 - row : row, e & 0x8000, (v[0x0c00 + i] & 15) * 4, pr * 2, lo, hi);
     }
+}
+
+void k2ge_line(const uint8_t *v, int line, uint16_t *out)
+{
+    uint8_t idx[K2GE_W];
+    int x, neg = v[0x12] & 0x80;
+    k2ge_line_idx(v, line, idx);
+    for (x = 0; x < K2GE_W; x++) { unsigned c = RD16(v + 0x200 + idx[x] * 2); out[x] = (uint16_t)((neg ? ~c : c) & 0x0fff); }
 }

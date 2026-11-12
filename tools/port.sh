@@ -4,7 +4,7 @@
 # (or, with "fast", on one with 4 MB fast RAM), runs the host test, and checks the brief's gates.
 # Leaves bench.txt and shot.png in the project folder. Exit code 0 = PASS. CI runs exactly this.
 cd "$(dirname "$0")/.."
-. ./port.conf
+. "${PORT_CONF:-./port.conf}"                # PORT_CONF=<file>: bench another description (e.g. port.ngpc.conf)
 OPT=""; OUT=bench.txt; SHOT=shot.png
 if [ "$1" = fast ]; then OPT="--fast_memory=4096"; OUT=bench_fast.txt; SHOT=shot_fast.png; fi
 mkdir -p dist

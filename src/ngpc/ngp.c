@@ -12,6 +12,7 @@ uint8_t ngp_pad;
 uint32_t ngp_fatal_pc; int ngp_fatal_why;
 uint32_t ngp_frames;
 uint16_t ngp_z80_idle;
+uint32_t ngp_z80_steps, ngp_cpu_steps;      /* instructions run: sound program; main CPU when the interpreter runs it */
 
 static uint8_t ipend[16];               /* by number in the RAM vector table: 5 vertical blank, 6 Z80, 7-10 timers */
 static uint8_t z80_on, tff3;
@@ -68,7 +69,7 @@ static void z80_run(int32_t tstates)
             }
             memcpy(idle_reg, z80.r, 8); idle_f = z80.f; idle_sp = z80.sp; idle_serial = z80_serial; idle_valid = 1; z80_wrote = 0;
         }
-        t = z80_step();
+        t = z80_step(); ngp_z80_steps++;
         tstates -= t; z80_irq_in -= t;
     }
 }

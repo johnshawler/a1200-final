@@ -8,4 +8,7 @@
 #define K2GE_H_LINES 152
 /* v = the 16 KB at 0x8000-0xBFFF. out = 160 colours, 12 bits each (0x0BGR as the palette RAM holds them). */
 void k2ge_line(const uint8_t *v, int line, uint16_t *out);
+/* The same line as palette entries: out = 160 numbers 0..255, the colour's place in the palette RAM at 0x8200
+   (0-63 sprites, 64-127 scroll plane 1, 128-191 scroll plane 2, 240-247 background, 248-255 window). */
+void k2ge_line_idx(const uint8_t *v, int line, uint8_t *out);
 #endif

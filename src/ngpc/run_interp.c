@@ -47,7 +47,7 @@ uint32_t run_call(uint32_t pc)
         else if (f == 0xf1) at = 3; else if (f == 0xf2) at = 4; else if (f == 0xf3) at = (mem_r8(pc0 + 1) & 3) == 0 ? 2 : 4;
         if (at > 0) { op = mem_r8(pc0 + (uint32_t)at); if (op >= 0xe0 && op <= 0xef) call = 1; else if (op >= 0xf0 && f == 0xb0) ret = 1; }
         sp0 = cpu.gpr[3];
-        cpu_step();
+        cpu_step(); ngp_cpu_steps++;
         if (cpu.bad) { ngp_fatal(pc0, 1); return 0; }
         if (call && cpu.gpr[3] == sp0 - 4) depth++;                                        /* taken */
         else if (ret && cpu.gpr[3] != sp0) { if (!depth) return cpu.pc; depth--; }

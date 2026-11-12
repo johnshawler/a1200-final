@@ -57,6 +57,8 @@ int main(int argc, char **argv)
         if (ngp_fatal_why) { fprintf(stderr, "STOPPED at tick %u: reason %d at %06x\n", t + 1, ngp_fatal_why, (unsigned)ngp_fatal_pc); break; }
     }
     if (ramlog) fclose(ramlog);
+    if (verbose) printf("sound program: %u instructions (%u a tick); main CPU: %u instructions (%u a tick; counted by the interpreter only)\n",
+                        (unsigned)ngp_z80_steps, (unsigned)(ngp_z80_steps / (n ? n : 1)), (unsigned)ngp_cpu_steps, (unsigned)(ngp_cpu_steps / (n ? n : 1)));
     printf("ticks=%u checksum=%08x\n", n, (unsigned)game_checksum());
     return 0;
 }

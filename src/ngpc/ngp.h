@@ -16,6 +16,7 @@ extern const uint8_t *ngp_font;         /* 2 KB: the BIOS's character set, or 0 
 extern uint8_t ngp_pad;                 /* controller: bit 0 up, 1 down, 2 left, 3 right, 4 A, 5 B, 6 Option */
 extern uint32_t ngp_fatal_pc; extern int ngp_fatal_why;       /* set when the program reached something not translated */
 extern uint32_t ngp_frames;             /* frames (ticks) run so far */
+extern uint32_t ngp_z80_steps, ngp_cpu_steps;   /* instructions run so far: the sound program; the main CPU (interpreter only) */
 extern uint16_t ngp_z80_idle;           /* address of the sound program's idle loop (game knowledge), or 0 */
 
 uint8_t ngp_rd_slow(uint32_t a);        /* everything that is not RAM or ROM */
