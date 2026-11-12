@@ -67,8 +67,8 @@ static void game_start(void)
 static void read_keys(void)
 {
     UBYTE p = 0;
-    if (sys_keys[0x32]) p |= 0x01;                  /* X      = A */
-    if (sys_keys[0x31] || sys_keys[0x64]) p |= 0x02; /* Z, Alt = B */
+    if (sys_keys[0x31]) p |= 0x01;                  /* Z      = A (button 1) */
+    if (sys_keys[0x32] || sys_keys[0x64]) p |= 0x02; /* X, Alt = B (button 2) */
     if (sys_keys[KEY_SPACE]) p |= 0x04;             /* Space  = Select */
     if (sys_keys[KEY_RET] || sys_keys[0x43]) p |= 0x08; /* Return = Start */
     if (sys_keys[KEY_UP]) p |= 0x10;
