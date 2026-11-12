@@ -18,3 +18,5 @@ assets/*
 !assets/.gitkeep
 src/gen_*
 src/gen68k.s
+# built WHDLoad slave (make it from tools/whdload/LittleLeague.asm)
+tools/whdload/*.slave
