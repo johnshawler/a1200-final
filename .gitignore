@@ -13,8 +13,13 @@ __pycache__/
 frame_*.ppm
 # copyrighted inputs and everything derived from them: never published (this repository is public)
 original/*.nes
+original/*.ngc
+original/*.ngp
+original/*.npc
+original/*.bin
 *.rom
 assets/*
 !assets/.gitkeep
 src/gen_*
 src/gen68k.s
+src/ngpc/gen_*
