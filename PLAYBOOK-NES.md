@@ -5,7 +5,7 @@ a NES port, and add to it before finishing one** (section 9). The details of the
 `LEARNINGS.md`; the order of work is in `PIPELINE.md`.
 
 Ports get better only through this file and the tools next to it: a new session remembers nothing else.
-To start a new port: make the new repository from this one ("Use this template" once it is marked as a template,
+To start a new port, see `KICKOFF.md` (with a ready first message). In short: make the new repository from this one ("Use this template" once it is marked as a template,
 or a copy) and run `tools/new_port.sh <game> <rom.nes>`: it archives the previous port under `history/`,
 resets the per-game files and keeps everything reusable. The Claude skill in `skills/amiga-nes-port/SKILL.md`
 (install it in Claude) makes any session start by reading this playbook and end by adding to it.
