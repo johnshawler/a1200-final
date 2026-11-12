@@ -1,19 +1,28 @@
-/* cpu900.h - a TLCS-900/H interpreter (the Neo Geo Pocket CPU core), host only. It never runs on the Amiga.
+/* cpu900.h - a TLCS-900/H interpreter (the Neo Geo Pocket CPU core) and the instruction primitives the
+ * translated code is built from. Plain C, no platform header.
  *
- * Include it in one C file after defining the two memory functions it calls:
- *     static uint8_t mem_r8(uint32_t a);              a is already masked to 24 bits
- *     static void    mem_w8(uint32_t a, uint8_t v);
- * It is used by tools/ngpref/ngpref.c (the reference machine) and tools/ngpref/verify.c (the interpreter with
- * the port's frame model, which the translation is compared with tick by tick).
+ * Before including it, a file must have the two memory functions it calls in scope (src/ngpc/ngp.h has them):
+ *     uint8_t mem_r8(uint32_t a);              a is already masked to 24 bits
+ *     void    mem_w8(uint32_t a, uint8_t v);
+ * Define CPU900_EXTERN before including to share one CPU state between files (it is then defined once, in
+ * the file that defines CPU900_DEFINE as well).
+ *
+ * Users: tools/ngpref/ngpref.c (the reference machine), src/ngpc/run_interp.c (the interpreter with the port's
+ * frame model, which the translation is compared with tick by tick) and the code tools/recomp900.py generates.
  *
  * Written from the instruction set as documented by Toshiba. The opcode map is the one of tools/tlcs900.py
  * (checked against MAME's tables); the base cycle counts are in cycles900.h. Where the data sheet leaves a flag
- * undefined, the choice made here is the one tools/recomp900.py also makes: the two must agree bit for bit.
+ * undefined, one choice is made here and the translation inherits it, because it calls these same functions.
  */
 #ifndef CPU900_H
 #define CPU900_H
 #include <stdint.h>
 #include "cycles900.h"
+#ifdef __GNUC__
+#define CPU900_UNUSED __attribute__((unused))
+#else
+#define CPU900_UNUSED
+#endif
 
 #define F_S 0x80
 #define F_Z 0x40
@@ -33,7 +42,13 @@ typedef struct {
     int      bad;               /* the last step met bytes that are not an instruction (pc is left on them) */
     uint32_t dummy;
 } Cpu900;
+#if defined(CPU900_EXTERN) && !defined(CPU900_DEFINE)
+extern Cpu900 cpu;
+#elif defined(CPU900_EXTERN)
+Cpu900 cpu;
+#else
 static Cpu900 cpu;
+#endif
 
 #define CPU_RFP   ((cpu.sr >> 8) & 3)
 #define CPU_IFF   ((cpu.sr >> 12) & 7)
@@ -52,54 +67,54 @@ static uint32_t *cpu_regp(unsigned code)
     if (code >= 0xd0) return &cpu.bank[(CPU_RFP - 1) & 3][(code >> 2) & 3];
     cpu.dummy = 0; return &cpu.dummy;
 }
-static uint32_t cpu_getr(int size, unsigned code)
+CPU900_UNUSED static uint32_t cpu_getr(int size, unsigned code)
 {
     uint32_t v = *cpu_regp(code);
     if (size == 4) return v;
     if (size == 2) return (v >> ((code & 2) * 8)) & 0xffff;
     return (v >> ((code & 3) * 8)) & 0xff;
 }
-static void cpu_setr(int size, unsigned code, uint32_t x)
+CPU900_UNUSED static void cpu_setr(int size, unsigned code, uint32_t x)
 {
     uint32_t *p = cpu_regp(code);
     if (size == 4) *p = x;
     else if (size == 2) { int sh = (code & 2) * 8; *p = (*p & ~(0xffffu << sh)) | ((x & 0xffff) << sh); }
     else { int sh = (code & 3) * 8; *p = (*p & ~(0xffu << sh)) | ((x & 0xff) << sh); }
 }
-static unsigned cpu_short(int size, int r) { return size == 1 ? cpu_code8[r & 7] : cpu_code16[r & 7]; }
+CPU900_UNUSED static unsigned cpu_short(int size, int r) { return size == 1 ? cpu_code8[r & 7] : cpu_code16[r & 7]; }
 
 /* ---- memory ---- */
-static uint32_t cpu_rd(int size, uint32_t a)
+CPU900_UNUSED static uint32_t cpu_rd(int size, uint32_t a)
 {
     uint32_t v = mem_r8(a & 0xffffff);
     if (size > 1) v |= (uint32_t)mem_r8((a + 1) & 0xffffff) << 8;
     if (size > 2) v |= (uint32_t)mem_r8((a + 2) & 0xffffff) << 16 | (uint32_t)mem_r8((a + 3) & 0xffffff) << 24;
     return v;
 }
-static void cpu_wr(int size, uint32_t a, uint32_t v)
+CPU900_UNUSED static void cpu_wr(int size, uint32_t a, uint32_t v)
 {
     mem_w8(a & 0xffffff, (uint8_t)v);
     if (size > 1) mem_w8((a + 1) & 0xffffff, (uint8_t)(v >> 8));
     if (size > 2) { mem_w8((a + 2) & 0xffffff, (uint8_t)(v >> 16)); mem_w8((a + 3) & 0xffffff, (uint8_t)(v >> 24)); }
 }
-static uint32_t cpu_fetch(int size) { uint32_t v = cpu_rd(size, cpu.pc); cpu.pc += size; return v; }
-static void cpu_push(int size, uint32_t v) { XSP -= size; cpu_wr(size, XSP, v); }
-static uint32_t cpu_pop(int size) { uint32_t v = cpu_rd(size, XSP); XSP += size; return v; }
+CPU900_UNUSED static uint32_t cpu_fetch(int size) { uint32_t v = cpu_rd(size, cpu.pc); cpu.pc += size; return v; }
+CPU900_UNUSED static void cpu_push(int size, uint32_t v) { XSP -= size; cpu_wr(size, XSP, v); }
+CPU900_UNUSED static uint32_t cpu_pop(int size) { uint32_t v = cpu_rd(size, XSP); XSP += size; return v; }
 
 /* ---- flags ---- */
-static int cpu_parity(int size, uint32_t v)            /* 1 when the number of set bits is even (8 or 16 bits) */
+CPU900_UNUSED static int cpu_parity(int size, uint32_t v)            /* 1 when the number of set bits is even (8 or 16 bits) */
 {
     v &= cpu_mask[size == 4 ? 2 : size];
     v ^= v >> 8; v ^= v >> 4; v ^= v >> 2; v ^= v >> 1;
     return !(v & 1);
 }
-static void cpu_setsz(int size, uint32_t r)
+CPU900_UNUSED static void cpu_setsz(int size, uint32_t r)
 {
     cpu.sr &= ~(F_S | F_Z);
     if (r & cpu_sign[size]) cpu.sr |= F_S;
     if (!(r & cpu_mask[size])) cpu.sr |= F_Z;
 }
-static int cpu_cond(int cc)
+CPU900_UNUSED static int cpu_cond(int cc)
 {
     int s = !!(cpu.sr & F_S), z = !!(cpu.sr & F_Z), v = !!(cpu.sr & F_V), c = cpu.sr & F_C, r;
     switch (cc & 7) {
@@ -116,7 +131,7 @@ static int cpu_cond(int cc)
 }
 
 /* ALU: 0 ADD 1 ADC 2 SUB 3 SBC 4 AND 5 XOR 6 OR 7 CP. Sets the flags, returns the result (CP: the difference). */
-static uint32_t cpu_alu(int op, int size, uint32_t a, uint32_t b)
+CPU900_UNUSED static uint32_t cpu_alu(int op, int size, uint32_t a, uint32_t b)
 {
     uint32_t m = cpu_mask[size], sg = cpu_sign[size], r, cin = 0;
     uint16_t f = cpu.sr & ~(F_S | F_Z | F_H | F_V | F_N | F_C);
@@ -149,7 +164,7 @@ static uint32_t cpu_alu(int op, int size, uint32_t a, uint32_t b)
     return r;
 }
 /* INC and DEC of a byte register or of memory: like ADD and SUB, but the carry flag stays */
-static uint32_t cpu_incdec(int dec, int size, uint32_t a, uint32_t n)
+CPU900_UNUSED static uint32_t cpu_incdec(int dec, int size, uint32_t a, uint32_t n)
 {
     uint16_t c = cpu.sr & F_C;
     uint32_t r = cpu_alu(dec ? 2 : 0, size, a, n);
@@ -157,7 +172,7 @@ static uint32_t cpu_incdec(int dec, int size, uint32_t a, uint32_t n)
     return r;
 }
 /* shifts and rotates: 0 RLC 1 RRC 2 RL 3 RR 4 SLA 5 SRA 6 SLL 7 SRL, count 1..16 */
-static uint32_t cpu_shift(int op, int size, uint32_t v, int count)
+CPU900_UNUSED static uint32_t cpu_shift(int op, int size, uint32_t v, int count)
 {
     uint32_t m = cpu_mask[size], sg = cpu_sign[size];
     int bits = size * 8, c = cpu.sr & F_C, i;
@@ -184,7 +199,7 @@ static uint32_t cpu_shift(int op, int size, uint32_t v, int count)
     return v;
 }
 /* DIV and DIVS: quotient in the low half, remainder in the high half; V on overflow or division by zero */
-static uint32_t cpu_div(int size, uint32_t val, uint32_t d, int sgn)
+CPU900_UNUSED static uint32_t cpu_div(int size, uint32_t val, uint32_t d, int sgn)
 {
     int hb = size * 8;                                  /* size = size of the divisor: 1 or 2 */
     uint32_t hm = cpu_mask[size];
@@ -203,10 +218,10 @@ static uint32_t cpu_div(int size, uint32_t val, uint32_t d, int sgn)
     }
 }
 
-static void cpu_set_sr(uint16_t v) { cpu.sr = v | 0x8800; }
+CPU900_UNUSED static void cpu_set_sr(uint16_t v) { cpu.sr = v | 0x8800; }
 
 /* Take an interrupt or a software interrupt through vector number n (the table is at 0xFFFF00). */
-static void cpu_vector(int n, int level)
+CPU900_UNUSED static void cpu_vector(int n, int level)
 {
     cpu_push(4, cpu.pc);
     cpu_push(2, cpu.sr);
@@ -216,7 +231,7 @@ static void cpu_vector(int n, int level)
 }
 
 /* ---- memory operand of a prefix byte: returns the address; *cyc gets the extra states ---- */
-static uint32_t cpu_ea(int first, int *cyc, int *ok)
+CPU900_UNUSED static uint32_t cpu_ea(int first, int *cyc, int *ok)
 {
     int low = first & 15;
     uint32_t a;
@@ -249,7 +264,7 @@ static uint32_t cpu_ea(int first, int *cyc, int *ok)
     *ok = 0; return 0;
 }
 
-static int cpu_bit_mem(int kind, uint32_t ea, int bit)  /* 0 ANDCF 1 ORCF 2 XORCF 3 LDCF 4 STCF 5 TSET 6 RES 7 SET 8 CHG 9 BIT */
+CPU900_UNUSED static int cpu_bit_mem(int kind, uint32_t ea, int bit)  /* 0 ANDCF 1 ORCF 2 XORCF 3 LDCF 4 STCF 5 TSET 6 RES 7 SET 8 CHG 9 BIT */
 {
     uint8_t v = mem_r8(ea & 0xffffff), b = (v >> bit) & 1, c = cpu.sr & F_C;
     switch (kind) {
@@ -269,7 +284,7 @@ static int cpu_bit_mem(int kind, uint32_t ea, int bit)  /* 0 ANDCF 1 ORCF 2 XORC
 }
 
 /* ---- instructions on a register (prefix C7-CF, D7-DF, E7-EF) ---- */
-static int cpu_op_reg(int size, unsigned code, int first, int second, int *cyc)
+CPU900_UNUSED static int cpu_op_reg(int size, unsigned code, int first, int second, int *cyc)
 {
     uint32_t v = cpu_getr(size, code), m = cpu_mask[size], t;
     int R = second & 7, n;
@@ -400,7 +415,7 @@ static int cpu_op_reg(int size, unsigned code, int first, int second, int *cyc)
 }
 
 /* ---- instructions with a memory source (prefix 80-AF, C0-E5) ---- */
-static int cpu_op_src(int size, uint32_t ea, int first, int second, int *cyc)
+CPU900_UNUSED static int cpu_op_src(int size, uint32_t ea, int first, int second, int *cyc)
 {
     uint32_t m = cpu_mask[size], v, t;
     int R = second & 7, n;
@@ -480,7 +495,7 @@ static int cpu_op_src(int size, uint32_t ea, int first, int second, int *cyc)
 }
 
 /* ---- instructions with a memory destination (prefix B0-BF, F0-F5) ---- */
-static int cpu_op_dst(uint32_t ea, int first, int second, int *cyc)
+CPU900_UNUSED static int cpu_op_dst(uint32_t ea, int first, int second, int *cyc)
 {
     int R = second & 7;
     switch (second) {
@@ -511,7 +526,7 @@ static int cpu_op_dst(uint32_t ea, int first, int second, int *cyc)
 
 /* Execute one instruction. Returns the number of CPU states it took. When the bytes at pc are not an
    instruction, cpu.bad is set, pc stays on them and 0 is returned. */
-static int cpu_step(void)
+CPU900_UNUSED static int cpu_step(void)
 {
     uint32_t pc0 = cpu.pc;
     int first = cpu_fetch(1), cyc = 0, ok = 1, r = first & 7;

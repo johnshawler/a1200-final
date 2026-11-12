@@ -9,6 +9,8 @@
  *     -s                print per-frame load: instructions and CPU states used, interrupts taken
  *     -w a1,a2,...      addresses (hex) of wait loops: instructions executed there do not count as load
  *     -r file           write the 12 KB of work RAM after every frame
+ *     -z file           write the Z80's 4 KB (the sound program) each time the game starts the Z80
+ *     -W a1,a2,...      like -w for the Z80: addresses (hex) of the sound program's idle loop
  *     -p f1,f2,...      for these frames print where the instructions went (the 12 busiest addresses): shows wait loops
  *     -t                trace every instruction (huge)
  *
@@ -20,9 +22,9 @@
  * serial port, flash writes (they succeed and are forgotten), the mono mode of games without colour. What a
  * game touched of these is in the summary this program prints at the end ("uses:" line).
  *
- * Flow file lines (all addresses hex):  E pc  = an instruction was executed at pc;  I to from  = a jump or call
- * through a register or memory reached "to";  V n to  = interrupt vector n was taken to "to";  B n  = BIOS system
- * call n was used;  H pc  = a HALT was executed at pc.
+ * Flow file lines (all addresses hex):  E pc  = an instruction was executed at pc;  I to from  = the jump at
+ * "from" through a register or memory went to "to";  C to from  = the same for a call;  V n to  = interrupt
+ * vector n was taken to "to";  B n  = BIOS system call n was used;  H pc  = a HALT was executed at pc.
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -66,7 +68,8 @@ static const uint32_t sys_addr[27] = {
 
 /* ---- timers and interrupts ---- */
 static uint8_t tcount[4]; static uint32_t tpre; static int tff3;
-static int z80_on, z80_budget; static long z80_instr, psg_writes;
+static int z80_on, z80_budget; static long z80_instr, psg_writes, frame_z80, frame_z80_idle, frame_z80_irq;
+static uint16_t zwait[32]; static int nzwait; static uint32_t *zprof; static const char *zdump; static int z80_starts;
 static uint8_t ipend[16];               /* by the number of the vector in RAM: 5 VBL, 6 Z80, 7-10 timers 0-3 */
 
 static void set_tff3(int v);
@@ -129,7 +132,7 @@ static void mem_w8(uint32_t a, uint8_t v)
     if ((a >= 0x200000 && a < 0x400000) || (a >= 0x800000 && a < 0xa00000)) { uses |= USE_FLASH; return; }
 }
 
-#include "cpu900.h"
+#include "../../src/ngpc/cpu900.h"
 
 /* ---- the Z80 sound processor: 4 KB shared with the main CPU at 0x7000, the sound chip, a command byte ---- */
 static uint8_t z80_mr(uint16_t a)
@@ -147,10 +150,14 @@ static void z80_mw(uint16_t a, uint8_t v)
 }
 static uint8_t z80_in(uint16_t port);
 static void z80_out(uint16_t port, uint8_t v);
-#include "z80.h"
+#include "../../src/ngpc/z80.h"
 static uint8_t z80_in(uint16_t port) { (void)port; return 0xff; }
 static void z80_out(uint16_t port, uint8_t v) { (void)port; (void)v; z80.irq_line = 0; }   /* any port write ends its interrupt */
-static void z80_start(void) { z80_reset(); z80_budget = 0; }
+static void z80_start(void)
+{
+    z80_reset(); z80_budget = 0; z80_starts++;
+    if (zdump) { FILE *f = fopen(zdump, z80_starts == 1 ? "wb" : "ab"); if (f) { fwrite(ram + 0x3000, 1, 0x1000, f); fclose(f); } }
+}
 static void z80_nmi(void) { z80.nmi_pending = 1; }
 static void set_tff3(int v) { if (v && !tff3) z80.irq_line = 1; tff3 = v; }        /* timer 3's output is the Z80's interrupt */
 
@@ -158,8 +165,13 @@ static void flow(char kind, uint32_t a, uint32_t b)
 {
     if (!flowf) return;
     if (kind == 'E') { if (seen_e[a >> 3] & (1 << (a & 7))) return; seen_e[a >> 3] |= (uint8_t)(1 << (a & 7)); fprintf(flowf, "E %06x\n", a); }
-    else if (kind == 'I') { if (seen_i[a >> 3] & (1 << (a & 7))) return; seen_i[a >> 3] |= (uint8_t)(1 << (a & 7)); fprintf(flowf, "I %06x %06x\n", a, b); }
-    else if (kind == 'V') fprintf(flowf, "V %u %06x\n", a, b);
+    else if (kind == 'I' || kind == 'C') {                  /* once per (target, source) pair */
+        static uint32_t pairs[65536][2]; static int npairs; int i;
+        for (i = 0; i < npairs; i++) if (pairs[i][0] == a && pairs[i][1] == b) return;
+        if (npairs < 65536) { pairs[npairs][0] = a; pairs[npairs][1] = b; npairs++; }
+        fprintf(flowf, "%c %06x %06x\n", kind, a, b);
+    }
+    else if (kind == 'V') { static uint32_t last[16]; if (a < 16 && last[a] != b + 1) { last[a] = b + 1; fprintf(flowf, "V %u %06x\n", a, b); } }
     else if (kind == 'B') fprintf(flowf, "B %u\n", a);
     else fprintf(flowf, "%c %06x\n", kind, a);
 }
@@ -296,14 +308,18 @@ static int step(void)
     {   uint8_t f = mem_r8(pc0), s2 = mem_r8((pc0 + 1) & 0xffffff);
         st = cpu_step();
         if (cpu.bad) { fprintf(stderr, "frame %d: not an instruction at %06x: %02x %02x %02x %02x\n", frame, pc0, f, s2, mem_r8(pc0 + 2), mem_r8(pc0 + 3)); exit(1); }
+        if (f >= 0xf8 && (f & 7) == 1) { bios_call(cpu.bank[3][0] >> 8 & 0xff); cpu_set_sr((uint16_t)cpu_pop(2)); cpu.pc = cpu_pop(4) & 0xffffff; }
         if (flowf) {
+            int at = -1;                                /* where the opcode byte of a "destination" instruction is */
             if (f == 0x05) flow('H', pc0, 0);
-            if (f >= 0xf8 && (f & 7) == 1) { bios_call(cpu.bank[3][0] >> 8 & 0xff); cpu_set_sr((uint16_t)cpu_pop(2)); cpu.pc = cpu_pop(4) & 0xffffff; }
-            else if ((f & 0xf0) == 0xb0 || (f >= 0xf0 && f <= 0xf5)) {             /* JP/CALL through a register or memory */
-                uint8_t op = mem_r8((pc0 + (cpu.pc >= pc0 ? 0 : 0)) & 0xffffff); (void)op;
-                if (cpu.pc != ((pc0 + 2) & 0xffffff) && f != 0xf1 && f != 0xf2 && f != 0xf0 && cpu.pc < 0xff0000) flow('I', cpu.pc, pc0);
+            if (f >= 0xb0 && f <= 0xb7) at = 1; else if (f >= 0xb8 && f <= 0xbf) at = 2; else if (f == 0xf4 || f == 0xf5) at = 2;
+            else if (f == 0xf3) at = (s2 & 3) == 0 ? 2 : 4;
+            if (at > 0) {
+                uint8_t op = mem_r8((pc0 + (uint32_t)at) & 0xffffff);
+                /* taken: always for the condition T, else when the pc is not the next instruction (a table may point there too) */
+                if (op >= 0xd0 && op <= 0xef && ((op & 15) == 8 || cpu.pc != ((pc0 + (uint32_t)at + 1) & 0xffffff)) && cpu.pc < 0xff0000) flow(op < 0xe0 ? 'I' : 'C', cpu.pc, pc0);
             }
-        } else if (f >= 0xf8 && (f & 7) == 1) { bios_call(cpu.bank[3][0] >> 8 & 0xff); cpu_set_sr((uint16_t)cpu_pop(2)); cpu.pc = cpu_pop(4) & 0xffffff; }
+        }
     }
     frame_instr++; total_instr++;
     if (profiling) prof[pc0]++;
@@ -314,7 +330,7 @@ static int step(void)
 static void run_frame(void)
 {
     int done = 0;
-    frame_instr = frame_states = frame_idle = frame_irq = 0;
+    frame_instr = frame_states = frame_idle = frame_irq = 0; frame_z80 = frame_z80_idle = frame_z80_irq = 0;
     while (!done) {
         int st;
         check_irq();
@@ -324,7 +340,15 @@ static void run_frame(void)
         line_states += st;
         if (line_states >= LINE_STATES) { line_states -= LINE_STATES; end_of_line(); if (raster == 0) done = 1; }
         timers(st);
-        if (z80_on) { z80_budget += st; while (z80_budget > 0) { z80_budget -= 2 * z80_step(); z80_instr++; } }
+        if (z80_on) {
+            z80_budget += st;
+            while (z80_budget > 0) {
+                uint16_t zpc = z80.pc; int k, irq = z80.irq_line && z80.iff1;
+                z80_budget -= 2 * z80_step(); z80_instr++; frame_z80++; frame_z80_irq += irq;
+                if (z80.halted) frame_z80_idle++; else for (k = 0; k < nzwait; k++) if (zwait[k] == zpc) { frame_z80_idle++; break; }
+                if (profiling && zprof) zprof[zpc]++;
+            }
+        }
     }
 }
 
@@ -370,7 +394,9 @@ int main(int argc, char **argv)
     fclose(f);
     frames = atoi(argv[2]);
     for (i = 3; i < argc; i++) {
-        if (!strcmp(argv[i], "-p") && i + 1 < argc) { profs = argv[++i]; prof = calloc(1 << 24, sizeof *prof); }
+        if (!strcmp(argv[i], "-p") && i + 1 < argc) { profs = argv[++i]; prof = calloc(1 << 24, sizeof *prof); zprof = calloc(1 << 16, sizeof *zprof); }
+        else if (!strcmp(argv[i], "-z") && i + 1 < argc) zdump = argv[++i];
+        else if (!strcmp(argv[i], "-W") && i + 1 < argc) { char *p = argv[++i]; while (*p && nzwait < 32) { zwait[nzwait++] = (uint16_t)strtoul(p, &p, 16); if (*p == ',') p++; } }
         else if (!strcmp(argv[i], "-b") && i + 1 < argc) { f = fopen(argv[++i], "rb"); if (!f || fread(biosimg, 1, 0x10000, f) != 0x10000) { fprintf(stderr, "cannot read the BIOS image\n"); return 2; } fclose(f); have_bios = 1; }
         else if (!strcmp(argv[i], "-i") && i + 1 < argc) load_script(argv[++i]);
         else if (!strcmp(argv[i], "-d") && i + 1 < argc) dumps = argv[++i];
@@ -394,10 +420,12 @@ int main(int argc, char **argv)
             int k; uint32_t a;
             printf("frame %d: busiest addresses (instructions executed there):", frame);
             for (k = 0; k < 12; k++) { uint32_t best = 0; for (a = 0x200000; a < 0xa00000; a++) if (prof[a] > prof[best]) best = a; if (!prof[best]) break; printf(" %06x:%u", best, prof[best]); prof[best] = 0; }
-            printf("\n"); memset(prof + 0x200000, 0, 0x800000 * sizeof *prof); profiling = 0;
+            printf("\nframe %d: busiest Z80 addresses:", frame);
+            for (k = 0; k < 12; k++) { uint32_t best = 0; for (a = 0; a < 0x10000; a++) if (zprof[a] > zprof[best]) best = a; if (!zprof[best]) break; printf(" %04x:%u", best, zprof[best]); zprof[best] = 0; }
+            printf("\n"); memset(prof + 0x200000, 0, 0x800000 * sizeof *prof); memset(zprof, 0, 0x10000 * sizeof *zprof); profiling = 0;
         }
-        if (stats) printf("frame %5d: %6ld instructions, %6ld of %d states busy (%3ld%%), %ld interrupts\n", frame, frame_instr,
-                          frame_states - frame_idle, LINE_STATES * LINES, (frame_states - frame_idle) * 100 / (LINE_STATES * LINES), frame_irq);
+        if (stats) printf("frame %5d: %6ld instructions, %6ld of %d states busy (%3ld%%), %ld interrupts; Z80 %5ld instructions outside its idle loop, %ld interrupts\n", frame, frame_instr,
+                          frame_states - frame_idle, LINE_STATES * LINES, (frame_states - frame_idle) * 100 / (LINE_STATES * LINES), frame_irq, frame_z80 - frame_z80_idle, frame_z80_irq);
         if (rf) fwrite(ram, 1, 0x3000, rf);
         if (dumps) { snprintf(key, sizeof key, ",%d,", frame); snprintf(list, sizeof list, ",%s,", dumps); if (strstr(list, key)) dump_ppm(outdir, frame); }
     }
