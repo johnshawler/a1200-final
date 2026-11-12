@@ -97,6 +97,7 @@ void game_tick(unsigned short in)
    through the screens between plays. It plays pitches, hits and fielding: the busiest scenes. */
 unsigned short game_bench_input(unsigned int t)
 {
+    /* BENCH INPUT BEGIN (per game: tools/new_port.sh resets it) */
     if (t >= 100 && t <= 105) return IN_START;
     if (t >= 200 && t <= 205) return IN_DOWN;
     if (t >= 250 && t <= 255) return IN_A;
@@ -104,6 +105,7 @@ unsigned short game_bench_input(unsigned int t)
     if (t >= 360 && t <= 365) return IN_DOWN;
     if (t >= 400 && t <= 405) return IN_A;
     if (t >= 500 && (t & 127) < 4) return IN_A;
+    /* BENCH INPUT END */
     return 0;
 }
 
