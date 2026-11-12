@@ -47,10 +47,10 @@ EXTRA_ENTRIES = set()   # functions no trace reached (task and state routines st
 NOT_WAITS = set()       # branches that look like a wait loop to the translator and are not
 ''' % (game, game))
 c = open('port.ngpc.conf').read()
-c = re.sub(r'^GAME=\\S+', 'GAME=%s' % game, c, flags=re.M)
-c = re.sub(r'^NAME=\\S+', 'NAME=%s' % game, c, flags=re.M)
+c = re.sub(r'^GAME=\S+', 'GAME=%s' % game, c, flags=re.M)
+c = re.sub(r'^NAME=\S+', 'NAME=%s' % game, c, flags=re.M)
 c = re.sub(r'^GEN="[^"]*"', 'GEN="src/ngpc/gen_dispatch.c src/ngpc/gen_00.c"', c, flags=re.M)
-c = c.replace('# port.ngpc.conf - describes a Neo Geo Pocket Color port to tools/port.sh. tools/new_port_ngpc.sh copies it to\\n# port.conf with the game\\'s name.',
+c = c.replace("# port.ngpc.conf - describes a Neo Geo Pocket Color port to tools/port.sh. tools/new_port_ngpc.sh copies it to\n# port.conf with the game's name.",
               '# port.conf - describes this Neo Geo Pocket Color port to tools/port.sh and to CI.')
 open('port.conf', 'w').write(c)
 open('original/README.md', 'w').write('''# The game to port
