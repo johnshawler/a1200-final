@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """recomp.py - translate the NES game's 6502 code to C, once, on the host (the brief's route for 6502 games).
 
-usage: recomp.py rom.nes outdir flow1.txt [flow2.txt ...]
+usage: recomp.py [--game name] rom.nes outdir flow1.txt [flow2.txt ...]   (game knowledge: tools/games/<name>.py)
 
 flow files come from tools/nesref (option -c): executed instructions (E), indirect jump targets (I),
 returns that did not go back to their caller (U), calls into the switchable bank from outside it (X).
@@ -24,8 +24,15 @@ import sys, os, collections
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from op6502 import decode
 
-NORETURN = {0xc232}             # jump-table dispatcher: pops its return address, a table of words follows the JSR
-NMI_ENTRY = None
+# the per-game knowledge (tools/games/<name>.py): --game <name> as the first arguments
+import importlib
+args = sys.argv[1:]
+gamename = 'llb'
+if args[0] == '--game': gamename, args = args[1], args[2:]
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), 'games'))
+game = importlib.import_module(gamename)
+NORETURN = game.NORETURN
+sys.argv = [sys.argv[0]] + args
 
 rom = open(sys.argv[1], 'rb').read()
 nprg = rom[4]

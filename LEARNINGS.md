@@ -1,7 +1,7 @@
 # Learnings from porting Little League Baseball (NES) to the A1200
 
-What worked, what did not, and the numbers behind it. Written for whoever continues this port or ports another
-NES/6502 game with this template. The brief's own rules are in `BRIEF.md`; where it was unclear or wrong is in
+What worked, what did not, and the numbers behind it. Written for whoever continues this port. The general, reusable
+part for other NES ports is in `PLAYBOOK-NES.md`. The brief's own rules are in `BRIEF.md`; where it was unclear or wrong is in
 `NOTES.md`; the measured results are in `REPORT.txt`.
 
 ## 1. The route: translate, never emulate

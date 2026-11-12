@@ -16,4 +16,4 @@ assert d[:4] == b'NES\x1a' and d[4] == 8 and d[5] == 16 and ((d[6] >> 4) | (d[7]
 open('assets/prg.bin', 'wb').write(d[16:16 + 0x20000])
 open('assets/chr.bin', 'wb').write(d[16 + 0x20000:16 + 0x40000])
 PY
-python3 tools/recomp.py "$ROM" src tools/flow/attract.txt tools/flow/watch.txt tools/flow/play1p.txt
+python3 tools/recomp.py --game llb "$ROM" src tools/flow/attract.txt tools/flow/watch.txt tools/flow/play1p.txt
