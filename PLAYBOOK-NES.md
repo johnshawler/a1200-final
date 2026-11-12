@@ -5,8 +5,10 @@ a NES port, and add to it before finishing one** (section 9). The details of the
 `LEARNINGS.md`; the order of work is in `PIPELINE.md`.
 
 Ports get better only through this file and the tools next to it: a new session remembers nothing else.
-For a new port in a new repository, copy this file, `LEARNINGS.md`, `PIPELINE.md` and the reusable tools
-(section 1) into it first.
+To start a new port: make the new repository from this one ("Use this template" once it is marked as a template,
+or a copy) and run `tools/new_port.sh <game> <rom.nes>`: it archives the previous port under `history/`,
+resets the per-game files and keeps everything reusable. The Claude skill in `skills/amiga-nes-port/SKILL.md`
+(install it in Claude) makes any session start by reading this playbook and end by adding to it.
 
 ## 1. What is reusable, what is per game
 
@@ -16,11 +18,13 @@ For a new port in a new repository, copy this file, `LEARNINGS.md`, `PIPELINE.md
 | NES machine | `tools/nesref/nesref.c` (reference NES), `src/nes.{c,h}` (PPU/APU/pad state), `src/video.{c,h}` + `src/video68k.s` (PPU → AGA), `src/sound.{c,h}` (APU → Paula), `tools/vhost.c`, `tools/shost.c` | use; extend for what the game uses |
 | Mapper | MMC1 in `nesref.c`, `nes.c`, and the fast paths in `nes68k.s` (`_set_prg`, `_io_wr`) | add the new mapper in all three |
 | Per game | `tools/games/<game>.py` (NORETURN, hand-written routines), `game_bench_input` in `src/logic.c`, the flow traces in `tools/flow/`, `tools/make_assets.sh` (ROM check), `original/README.md` | write new |
+| Starting a port | `tools/new_port.sh`, `skills/amiga-nes-port/SKILL.md` | run once / install once |
 | Debugging | `tools/debug_run.sh`, `tools/shot_at.sh`, `src/prof68k.s` (1 kHz profiler), `LOGIC_TRACE`/`LOGIC_NOSUM`/`LOGIC_DUMP`/`HOLD_AT` builds | use as is |
 
 ## 2. Start of a port: the first day
 
-1. `tools/setup.sh`. Put the ROM in `original/`; check mapper, PRG/CHR sizes, mirroring, 50/60 Hz.
+1. `tools/new_port.sh <game> <rom.nes>`, `tools/setup.sh`; check mapper, PRG/CHR sizes, mirroring, 50/60 Hz
+   (`tools/make_assets.sh` refuses what the tools do not support yet: section 8).
 2. Run the ROM in `tools/nesref` headless; dump frames; find a **self-playing mode** (attract, "watch game",
    demo) for the bench and for coverage. Write the input scripts (`tools/flow/mkin.py`).
 3. **Measure the load before anything else**: `WAITPCS=<wait loop addresses> nesref -s` gives 6502 instructions

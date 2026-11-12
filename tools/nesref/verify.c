@@ -124,6 +124,7 @@ static int step(void)
 
 static unsigned short bench_input(unsigned int t)      /* copy of game_bench_input() in src/logic.c */
 {
+    /* BENCH INPUT BEGIN (per game: tools/new_port.sh resets it) */
     if (t >= 100 && t <= 105) return 64;
     if (t >= 200 && t <= 205) return 4;
     if (t >= 250 && t <= 255) return 16;
@@ -131,6 +132,7 @@ static unsigned short bench_input(unsigned int t)      /* copy of game_bench_inp
     if (t >= 360 && t <= 365) return 4;
     if (t >= 400 && t <= 405) return 16;
     if (t >= 500 && (t & 127) < 4) return 16;
+    /* BENCH INPUT END */
     return 0;
 }
 static uint8_t pad_of(unsigned short in)
