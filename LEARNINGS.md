@@ -131,6 +131,14 @@ instructions per 8×8 sprite), not memory.
   PPM). It found every display bug faster than the emulator, and it runs AddressSanitizer. Watch byte order:
   the Amiga is big-endian, so use explicit big-endian access where the host must read the same bytes.
 
+### 6b. Field play fixes found by playing (see PLAYBOOK-NES.md lessons log)
+
+- Redraw the background only when the CHR page the background uses changes, and then only the cells whose
+  tile pattern differs (`redraw_changed` in `src/video.c`); the game switches the sprite page while scrolling.
+- While scrolling, draw every needed column each frame (frames are late below 50 Hz); new screens stream 110
+  tiles a frame behind a black picture.
+- Border columns are blank; a column is drawn from the nametable when it enters the NES picture.
+
 ## 7. Sound
 
 - The NES APU is register-driven tone generation: model length counters, envelopes, sweep, the triangle's linear

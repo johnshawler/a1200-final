@@ -29,7 +29,9 @@ static const UWORD noise_per[16] = { 4,8,16,32,64,96,128,160,202,254,380,508,762
 static const UBYTE duty_seq[4] = { 0x40, 0x60, 0x78, 0x9f };   /* NES pulse duty steps, bit 7 = first step */
 
 static BYTE *wave_pulse[4];             /* 8 samples each, chip RAM */
+static BYTE *wave_pulse4[4];            /* 4 samples: for notes too high for 8 samples at Paula's fastest rate */
 static BYTE *wave_tri;                  /* 16 samples */
+static BYTE *wave_tri_s[2];             /* 8 and 4 samples, for high notes */
 static BYTE *wave_noise[2];             /* long and short LFSR sequences */
 
 typedef struct { UBYTE len, env_vol, env_div, env_start, sweep_div, sweep_reload; UWORD timer; } Tone;
@@ -48,8 +50,18 @@ int sound_load(void)
         if (!(wave_pulse[d] = sys_alloc(8, MEMF_CHIP))) return 0;
         for (i = 0; i < 8; i++) wave_pulse[d][i] = (duty_seq[d] & (0x80 >> i)) ? 60 : -60;
     }
+    for (d = 0; d < 4; d++) {                   /* 4 steps: 12.5% and 25% become 1 high step, 50% 2, 75% 3 */
+        static const UBYTE hi4[4] = { 1, 1, 2, 3 };
+        if (!(wave_pulse4[d] = sys_alloc(4, MEMF_CHIP))) return 0;
+        for (i = 0; i < 4; i++) wave_pulse4[d][i] = i < hi4[d] ? 60 : -60;
+    }
     if (!(wave_tri = sys_alloc(16, MEMF_CHIP))) return 0;
     for (i = 0; i < 16; i++) wave_tri[i] = (BYTE)((4 * (i < 8 ? 8 - i : i - 8) - 16) * 7);   /* 112 down to -112 and back up */
+    for (d = 0; d < 2; d++) {                   /* every 2nd / 4th sample of it */
+        int n = d ? 4 : 8, k = 16 / n;
+        if (!(wave_tri_s[d] = sys_alloc(n, MEMF_CHIP))) return 0;
+        for (i = 0; i < n; i++) wave_tri_s[d][i] = wave_tri[i * k];
+    }
     for (d = 0; d < 2; d++) {                   /* NES noise: 15-bit LFSR, feedback from bit 1 (long) or bit 6 */
         if (!(wave_noise[d] = sys_alloc(NOISE_LEN, MEMF_CHIP))) return 0;
         lfsr = 1;
@@ -163,13 +175,20 @@ void sound_frame(void)
         UBYTE r0 = apu_reg[n * 4];
         UWORD t = pulse[n].timer, vol = (r0 & 0x10) ? (r0 & 15) : pulse[n].env_vol;
         int mute = !pulse[n].len || t < 8 || sweep_target(n) > 0x7ff;     /* the sweep mutes even when disabled */
-        /* 8 samples a NES pulse period: Paula period = PAULA_CLOCK * 16 * (t + 1) / (NES_CLOCK * 8) */
-        set_chan(n, wave_pulse[r0 >> 6], 4, (UWORD)((PAULA_CLOCK * 2 / 1000 * (t + 1)) / (NES_CLOCK / 1000)), mute ? 0 : (UWORD)(vol * 3));
+        /* 8 samples a NES pulse period: Paula period = PAULA_CLOCK * 16 * (t + 1) / (NES_CLOCK * 8). A note too
+           high for that (Paula's fastest period is 124) uses 4 samples, so it keeps its pitch */
+        ULONG per = (PAULA_CLOCK * 2 / 1000 * (t + 1)) / (NES_CLOCK / 1000);
+        if (per < 124) set_chan(n, wave_pulse4[r0 >> 6], 2, (UWORD)((PAULA_CLOCK * 4 / 1000 * (t + 1)) / (NES_CLOCK / 1000)), mute ? 0 : (UWORD)(vol * 3));
+        else set_chan(n, wave_pulse[r0 >> 6], 4, (UWORD)per, mute ? 0 : (UWORD)(vol * 3));
     }
     {   UWORD t = (UWORD)(apu_reg[10] | ((apu_reg[11] & 7) << 8));
         int mute = !tri_len || !tri_lin || t < 2;
-        /* 16 samples a period (the NES has 32 steps) */
-        set_chan(2, wave_tri, 8, (UWORD)((PAULA_CLOCK * 2 / 1000 * (t + 1)) / (NES_CLOCK / 1000)), mute ? 0 : 40);
+        /* 16 samples a period (the NES has 32 steps); 8 or 4 for notes too high for that at Paula's fastest
+           rate. Clamping the rate instead played them an octave or more too low: a beep that was not in the game */
+        ULONG per = (PAULA_CLOCK * 2 / 1000 * (t + 1)) / (NES_CLOCK / 1000);
+        if (per >= 124) set_chan(2, wave_tri, 8, (UWORD)per, mute ? 0 : 40);
+        else if (per * 2 >= 124) set_chan(2, wave_tri_s[0], 4, (UWORD)((PAULA_CLOCK * 4 / 1000 * (t + 1)) / (NES_CLOCK / 1000)), mute ? 0 : 40);
+        else set_chan(2, wave_tri_s[1], 2, (UWORD)((PAULA_CLOCK * 8 / 1000 * (t + 1)) / (NES_CLOCK / 1000)), mute ? 0 : 40);
     }
     {   UBYTE r0 = apu_reg[12], r2 = apu_reg[14];
         UWORD vol = (r0 & 0x10) ? (r0 & 15) : noise.env_vol;

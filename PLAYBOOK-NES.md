@@ -143,3 +143,15 @@ sections above if a lesson is general.
   - **Extra sound during the bat toss**: the game turns a channel off and on again within one frame
     (`$4015 = $0D, $0F`). That stops the length counter on the NES; the sound code only looked at the last value.
     Now `apu_kill` records every stop. Check sound against register writes in order, not end-of-frame state.
+  - **The picture went black on every throw and hit**: the game switches a CHR bank as the camera moves, and the
+    display redrew everything (black until done). Only redraw when the bank the *background* reads changes
+    (in 4 KB mode with the background at $1000 that is CHR register 1), and then only the cells whose tile differs.
+    Also: a fixed tiles-per-frame budget falls behind when frames are late (below 50 Hz each picture scrolls
+    further); draw every column the view needs while scrolling, and keep the budget only for new screens.
+  - **Overdraw at the edges**: columns in the 32-pixel side borders miss the game's nametable writes (their cells
+    belong to the other side of the 512-pixel wrap) and came back stale. Keep the borders blank and draw a column
+    fresh when it enters the NES picture.
+  - **A strange beep**: Paula's fastest period is 124, so a 16-sample triangle or 8-sample pulse cannot play notes
+    above ~1.8 / 3.5 kHz; clamping the period played them an octave or more low. Use shorter waveforms (8/4
+    samples) for high notes instead. Test with `tools/vhost.c EVERY=2` (a slow Amiga) and look for per==124 in
+    `tools/shost.c STATS=2`.

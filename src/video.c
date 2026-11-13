@@ -58,7 +58,7 @@ static LONG cam_ux;                     /* unwrapped world x of NES screen x = 0
 static WORD nes_sx_prev = -1;
 static LONG col_lo, col_hi;             /* unwrapped tile columns col_lo..col_hi are drawn (col_lo > col_hi: none) */
 static LONG work_col; static WORD work_row = -1;
-static UBYTE drawn_bgsel, drawn_up0, drawn_up1, drawn_lo0, drawn_lo1, drawn_split;  /* the tile set the buffer holds */
+static UBYTE drawn_pu = 0xff, drawn_pl = 0xff, drawn_split;  /* the background tile pages the buffer holds */
 UBYTE video_flip[256];                  /* bit-reversed bytes, for h-flipped sprites */
 ULONG video_plane;                      /* bytes from one bitplane to the next (src/video68k.s) */
 #define flip_tab video_flip
@@ -101,6 +101,13 @@ static const UBYTE *chr_tile(UBYTE tile, int row)
     return nes_chr_data + (ULONG)(bank & 31) * 0x1000 + (a & 0xfff);
 }
 
+/* the 4 KB CHR page the background tiles come from, for the given MMC1 CHR registers */
+static UBYTE bg_page(UBYTE b0, UBYTE b1)
+{
+    if (mmc_ctrl & 0x10) return (UBYTE)((bgsel ? b1 : b0) & 31);
+    return (UBYTE)(((b0 & 0x1e) | bgsel) & 31);
+}
+
 /* nametable cell of unwrapped column uc, row r (vertical mirroring: two nametables side by side) */
 static UWORD nt_cell(LONG uc, int r) { return (UWORD)((((uc >> 5) & 1) << 10) | (r << 5) | (uc & 31)); }
 
@@ -121,16 +128,21 @@ static void draw_tile(LONG uc, int r) { draw_tile_copies(uc, r, rowcopies[r]); }
 
 static void draw_tile_copies(LONG uc, int r, UBYTE copies)
 {
-    UWORD cell = nt_cell(uc, r), base = cell & 0x400;
-    UBYTE tile = nes_vram[cell], tx = (UBYTE)(uc & 31);
-    UBYTE attr = nes_vram[base | 0x3c0 | ((r >> 2) << 3) | (tx >> 2)];
-    UBYTE pal = (UBYTE)((attr >> (((r & 2) << 1) | (tx & 2))) & 3);
-    const UBYTE *src = chr_tile(tile, r);
-    UBYTE p2 = (pal & 1) ? 0xff : 0, p3 = (pal & 2) ? 0xff : 0;
+    static const UBYTE blank[16];
+    UWORD cell, base;
+    UBYTE tile, tx, attr, pal, p2 = 0, p3 = 0;
+    const UBYTE *src = blank;
     LONG x = uc * 8;
     UBYTE *d;
     if (x < -64 || x >= LEVEL_W + 320) return;
-    if (colstate[uc & 63] == 2) { static const UBYTE blank[16]; src = blank; p2 = p3 = 0; }   /* a border column */
+    if (colstate[uc & 63] != 2) {                   /* not a (blank) border column */
+        cell = nt_cell(uc, r); base = cell & 0x400;
+        tile = nes_vram[cell]; tx = (UBYTE)(uc & 31);
+        attr = nes_vram[base | 0x3c0 | ((r >> 2) << 3) | (tx >> 2)];
+        pal = (UBYTE)((attr >> (((r & 2) << 1) | (tx & 2))) & 3);
+        src = chr_tile(tile, r);
+        p2 = (pal & 1) ? 0xff : 0; p3 = (pal & 2) ? 0xff : 0;
+    }
 #ifdef LOGIC_TRACE
     { extern ULONG vtiles; vtiles++; }
 #endif
@@ -146,7 +158,8 @@ static void want_cols(LONG *lo, LONG *hi)
     *hi = (cam_ux - VIEW_X + 320 + 8) >> 3;
 }
 
-static void invalidate(void) { col_lo = 1; col_hi = 0; work_row = -1; }
+static UBYTE fresh;                     /* a new screen is being drawn: show black until it is complete */
+static void invalidate(void) { col_lo = 1; col_hi = 0; work_row = -1; fresh = 1; }
 
 /* make every row's copies match what the scroll position sy shows */
 static void sync_rows(int sy)
@@ -188,16 +201,37 @@ static void stream_cols(int n)
     }
 }
 
-/* columns that crossed the edge of the NES picture since they were drawn */
+/* columns that crossed the edge of the NES picture since they were drawn: a column that came into the picture
+   is drawn from the nametable, one that left it is blanked. A column in the border misses the game's nametable
+   writes (its cells belong to the other side of the wrap), so it must not come back with old tiles. */
 static void fix_edges(void)
 {
     LONG uc;
     int r;
-    for (uc = col_lo; uc <= col_hi; uc++)            /* blank columns that came into the picture; columns that */
-        if (colstate[uc & 63] == 2 && col_visible(uc)) { /* left it keep their (correct) content                */
-            colstate[uc & 63] = 1;
+    for (uc = col_lo; uc <= col_hi; uc++) {
+        UBYTE want = col_visible(uc) ? 1 : 2;
+        if (colstate[uc & 63] != want) {
+            colstate[uc & 63] = want;
             for (r = 0; r < 30; r++) draw_tile(uc, r);
         }
+    }
+}
+
+/* the background's tile page changed from old to new for rows r0..r1-1: draw again the cells whose tile differs */
+static void redraw_changed(UBYTE old, UBYTE new, int r0, int r1)
+{
+    static UBYTE diff[256];
+    const UBYTE *a = nes_chr_data + (ULONG)old * 0x1000, *b = nes_chr_data + (ULONG)new * 0x1000;
+    int t, r, any = 0;
+    LONG uc;
+    for (t = 0; t < 256; t++) { diff[t] = memcmp(a + t * 16, b + t * 16, 16) != 0; any |= diff[t]; }
+    if (!any) return;
+    for (uc = col_lo; uc <= col_hi; uc++) {
+        if (colstate[uc & 63] == 2) continue;                 /* a blank border column */
+        for (r = r0; r < r1; r++) if (diff[nes_vram[nt_cell(uc, r)]]) draw_tile(uc, r);
+    }
+    if (work_row > r0)
+        for (r = r0; r < r1 && r < work_row; r++) if (diff[nes_vram[nt_cell(work_col, r)]]) draw_tile(work_col, r);
 }
 
 /* the NES changed nametable cell i: redraw it where it is on screen (or the 16 tiles of an attribute cell) */
@@ -530,11 +564,20 @@ void video_frame(void)
         nsplit = 30; up0 = lo0 = mmc_chr0; up1 = lo1 = mmc_chr1;
     }
     split_row = nsplit;
-    if (nes_redraw_all || bgsel != drawn_bgsel || up0 != drawn_up0 || up1 != drawn_up1 || lo0 != drawn_lo0
-        || lo1 != drawn_lo1 || nsplit != drawn_split) {
-        drawn_bgsel = bgsel; drawn_up0 = up0; drawn_up1 = up1; drawn_lo0 = lo0; drawn_lo1 = lo1; drawn_split = nsplit;
+    {   UBYTE pu = bg_page(up0, up1), pl = bg_page(lo0, lo1);
+        /* A bank switch that leaves the background's pages alone (in field play the game switches the sprite
+           page) changes nothing here. One that changes them redraws only the cells whose tile looks different:
+           the NES switches a bank for free, so the picture must not go black for it. */
+        if (nes_redraw_all || nsplit != drawn_split) invalidate();
+        else if (col_lo <= col_hi && (pu != drawn_pu || pl != drawn_pl)) {
+            if (drawn_pu == 0xff) invalidate();
+            else {
+                if (pu != drawn_pu) VP(0, redraw_changed(drawn_pu, pu, 0, nsplit));
+                if (pl != drawn_pl) VP(0, redraw_changed(drawn_pl, pl, nsplit, 30));
+            }
+        }
+        drawn_pu = pu; drawn_pl = pl; drawn_split = nsplit;
         nes_redraw_all = 0;
-        invalidate();
     }
 
     VP(1, sync_rows(sy));
@@ -545,11 +588,13 @@ void video_frame(void)
         VP(0, for (i = 0; i < nes_ndirty; i++) budget -= redraw_cell(nes_dirty[i]));
     for (i = 0; i < nes_ndirty; i++) nes_dirty_flag[nes_dirty[i]] = 0;
     nes_ndirty = 0;
-    /* while the visible part is incomplete (a new screen), show black and draw quickly, as the NES's own
-       screen changes do; otherwise a few tiles a frame keep ahead of the scrolling */
+    /* A new screen is drawn over a few frames behind a black picture, as the NES's own screen changes are.
+       While scrolling, every column the view needs is drawn now: a frame drawn late (the Amiga is slower than
+       50 Hz in field play) scrolls further than a fixed budget, which fell behind and blanked the picture */
     want_cols(&vlo, &vhi);
-    budget = (on && col_lo <= vlo && col_hi >= vhi) ? 24 : 110;
+    budget = fresh ? 110 : 64 * 30;
     VP(1, stream_cols(budget));
+    if (col_lo <= vlo && col_hi >= vhi) fresh = 0;
     if (!(col_lo <= vlo && col_hi >= vhi)) on = 0;
     if (col_lo <= col_hi) fix_edges();
 

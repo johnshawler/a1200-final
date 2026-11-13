@@ -9,20 +9,19 @@ Display:               planes=4 scroll=1 fetch=0 buffers=1 sprites used=7 (3 att
 Busiest moment:        fielding: camera scrolling in x and y, ~40 NES sprites, NES CPU 95-100% busy.
                        Not a Step 2 sum: the logic alone is ~85% of a frame per NES frame there (measured, debug build,
                        p90 60,695 colour clocks a tick), and 6 NES frames fall in 5 Amiga frames.
-Cut from the original: the 32-pixel side borders
-                       show the backdrop colour; very high NES notes are clamped to Paula's fastest rate; sprite
+Cut from the original: the 32-pixel side borders are black; sprite
                        clusters that find no free hardware sprite would be dropped (none dropped in the 3000-tick host run).
                        Sound is in: the NES APU (2 pulse, triangle, noise; the game uses no DMC) modelled on Paula.
-Stock A1200 bench:     frames=2042 late=476 worst_cck=898827 avg_cck=41002 budget_cck=71051 worst_pct=1265 avg_pct=57 display_hz=50 shown_fps=40.5
+Stock A1200 bench:     frames=2035 late=500 worst_cck=1025202 avg_cck=42366 budget_cck=71051 worst_pct=1442 avg_pct=59 display_hz=50 shown_fps=40.1
                        ticks=3000 checksum=9ff827ce  (FS-UAE 3.1.66, tools/bench.sh, AROS ROM)
-With 4 MB fast RAM:    frames=2301 late=200 worst_cck=579146 avg_cck=25456 budget_cck=71051 worst_pct=815 avg_pct=35 display_hz=50 shown_fps=46.0
+With 4 MB fast RAM:    frames=2300 late=202 worst_cck=641064 avg_cck=26183 budget_cck=71051 worst_pct=902 avg_pct=36 display_hz=50 shown_fps=45.9
                        ticks=3000 checksum=9ff827ce
-With 8 MB fast RAM:    frames=2301 late=200 worst_cck=579146 avg_cck=25456 budget_cck=71051 worst_pct=815 avg_pct=35 display_hz=50 shown_fps=46.0
+With 8 MB fast RAM:    (measured before the last display change) frames=2301 late=200 worst_cck=579146 avg_cck=25456 budget_cck=71051 worst_pct=815 avg_pct=35 display_hz=50 shown_fps=46.0
                        ticks=3000 checksum=9ff827ce  (tools/bench.sh dist llb 3000 - --fast_memory=8192)
 Host checksum:         9ff827ce after 3000 ticks  equal. The frame model reproduces the NES's own lag (the main thread
                        overrunning a frame in field play): the host's NES RAM equals the reference NES's
                        (tools/nesref -r) at every tick through tick 2,190 of the self-playing game.
-Frame rate claim:      40.5 fps shown on the stock A1200, 46.0 fps with 4 or 8 MB fast RAM (the same), logic at 60
+Frame rate claim:      40.1 fps shown on the stock A1200, 45.9 fps with 4 MB fast RAM, logic at 60
                        ticks a second (game time follows the clock). 50 Hz NOT held on any of them: tools/port.sh
                        prints FAIL. Menus and batting run at 50 Hz on fast RAM; the late frames are field play (the NES
                        game itself uses 95-100% of its CPU there) and a few screen changes.
