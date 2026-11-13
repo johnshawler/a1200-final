@@ -13,6 +13,8 @@ jobs:
         run: tools/setup.sh
       - name: The kit is unchanged
         run: tools/check_kit.sh
+      - name: The brief's rules (an approved plan and class, nothing from "Never do these")
+        run: python3 tools/check_rules.py port.conf
       - name: Build, bench and check the gates
         run: tools/port.sh
       - name: Keep the evidence
