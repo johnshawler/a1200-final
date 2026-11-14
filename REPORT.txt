@@ -13,9 +13,9 @@ Cut from the original: nothing visible: the picture is cropped by the display wi
                        to 216 lines (8 hidden at the top and 16 at the bottom, where the game writes the next rows); sprite
                        clusters that find no free hardware sprite would be dropped (none dropped in the 3000-tick host run).
                        Sound is in: the NES APU (2 pulse, triangle, noise; the game uses no DMC) modelled on Paula.
-Stock A1200 bench:     frames=2112 late=421 worst_cck=1094242 avg_cck=39044 budget_cck=71051 worst_pct=1540 avg_pct=54 display_hz=50 shown_fps=41.6
+Stock A1200 bench:     frames=2108 late=425 worst_cck=1098640 avg_cck=39070 budget_cck=71051 worst_pct=1546 avg_pct=54 display_hz=50 shown_fps=41.6
                        ticks=3000 checksum=9ff827ce  (FS-UAE 3.1.66, tools/bench.sh, AROS ROM)
-With 4 MB fast RAM:    frames=2313 late=187 worst_cck=505965 avg_cck=24634 budget_cck=71051 worst_pct=712 avg_pct=34 display_hz=50 shown_fps=46.2
+With 4 MB fast RAM:    frames=2310 late=190 worst_cck=505805 avg_cck=24757 budget_cck=71051 worst_pct=711 avg_pct=34 display_hz=50 shown_fps=46.2
                        ticks=3000 checksum=9ff827ce
 With 8 MB fast RAM:    (measured before the last display change) frames=2301 late=200 worst_cck=579146 avg_cck=25456 budget_cck=71051 worst_pct=815 avg_pct=35 display_hz=50 shown_fps=46.0
                        ticks=3000 checksum=9ff827ce  (tools/bench.sh dist llb 3000 - --fast_memory=8192)

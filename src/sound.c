@@ -188,7 +188,9 @@ void sound_frame(void)
         ULONG per = (PAULA_CLOCK * 2 / 1000 * (t + 1)) / (NES_CLOCK / 1000);
         if (per >= 124) set_chan(2, wave_tri, 8, (UWORD)per, mute ? 0 : 40);
         else if (per * 2 >= 124) set_chan(2, wave_tri_s[0], 4, (UWORD)((PAULA_CLOCK * 4 / 1000 * (t + 1)) / (NES_CLOCK / 1000)), mute ? 0 : 40);
-        else set_chan(2, wave_tri_s[1], 2, (UWORD)((PAULA_CLOCK * 8 / 1000 * (t + 1)) / (NES_CLOCK / 1000)), mute ? 0 : 40);
+        /* the game plays such notes (about 4 kHz, at throws and hits: the reference NES writes them too). Four
+           steps carry about 20% more energy than the NES's 32-step triangle, and sound brighter: a little quieter */
+        else set_chan(2, wave_tri_s[1], 2, (UWORD)((PAULA_CLOCK * 8 / 1000 * (t + 1)) / (NES_CLOCK / 1000)), mute ? 0 : 32);
     }
     {   UBYTE r0 = apu_reg[12], r2 = apu_reg[14];
         UWORD vol = (r0 & 0x10) ? (r0 & 15) : noise.env_vol;

@@ -18,6 +18,7 @@
 #include <string.h>
 #include <stdint.h>
 
+static FILE *apulog; static int cur_frame;    /* APULOG=file: APU register writes */
 static uint8_t *prg, *chr; static int prg_banks, chr_banks8;
 static uint8_t ram[0x800], vram[0x800], pal[32], oam[256], chrram[0x2000];
 /* MMC1 */
@@ -131,6 +132,7 @@ static void wr(uint16_t a, uint8_t d)
     }
     if (a == 0x4014) { int i; for (i = 0; i < 256; i++) oam[(oamaddr + i) & 255] = rd((d << 8) | i); cycles += 513; return; }
     if (a == 0x4016) { strobe = d & 1; if (strobe) padshift = pad; return; }
+    if (a >= 0x4000 && a < 0x4018 && apulog) fprintf(apulog, "W %d %04x %02x\n", cur_frame, a, d);   /* APULOG=file */
     if (a < 0x6000) return;
     if (a < 0x8000) { prgram[a & 0x1fff] = d; return; }
     /* MMC1 */
@@ -387,11 +389,12 @@ int main(int argc, char **argv)
         else if (!strcmp(argv[i], "-t")) trace = 1;
         else if (!strcmp(argv[i], "-r")) ramf = fopen(argv[++i], "wb");
     }
+    if (getenv("APULOG")) apulog = fopen(getenv("APULOG"), "w");
     PC = rd(0xfffc) | (rd(0xfffd) << 8);
     if (cov) cov_mark(PC, 4);
     for (fr = 0; fr < frames; fr++) {
         int y; char key[16];
-        frame_instr = frame_ppuw = frame_2002r = 0;
+        frame_instr = frame_ppuw = frame_2002r = 0; cur_frame = fr;
         if (trace) printf("---- frame %d\n", fr);
         /* pre-render line: copy vertical bits */
         ppustatus &= ~0x60;

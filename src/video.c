@@ -320,17 +320,24 @@ static void build_groups(void)
             g->pal3only = (nes_oam[i * 4 + 2] & 3) == 3;
         }
     }
-    /* merge groups that touch, while they fit */
+    /* merge groups that touch (neighbours in OAM order), and groups that overlap (any two), while they fit.
+       Overlapping sprites must end in one group: on different Amiga sprites their front-to-back order would be
+       the hardware's, not the NES's (a cap drawn as its own sprite vanished behind the head) */
     for (i = 0; i < ngrp; i++)
-        for (j = i + 1; j < ngrp && j <= i + 6; j++) {   /* neighbours in OAM order only */
+        for (j = i + 1; j < ngrp; j++) {
             Group *a = &grp[i], *b = &grp[j];
             WORD nx0 = a->x0 < b->x0 ? a->x0 : b->x0, nx1 = a->x1 > b->x1 ? a->x1 : b->x1;
             if (nx1 - nx0 > SPR_W || a->n + b->n > MAXIN) continue;
-            if (b->y0 > a->y1 + 1 || b->y1 < a->y0 - 1 || b->x0 > a->x1 + 1 || b->x1 < a->x0 - 1) continue;
+            if (j <= i + 6) { if (b->y0 > a->y1 + 1 || b->y1 < a->y0 - 1 || b->x0 > a->x1 + 1 || b->x1 < a->x0 - 1) continue; }
+            else if (b->y0 >= a->y1 || b->y1 <= a->y0 || b->x0 >= a->x1 || b->x1 <= a->x0) continue;
             a->x0 = nx0; a->x1 = nx1;
             if (b->y0 < a->y0) a->y0 = b->y0;
             if (b->y1 > a->y1) a->y1 = b->y1;
-            for (k = 0; k < b->n; k++) a->idx[a->n++] = b->idx[k];
+            for (k = 0; k < b->n; k++) {                 /* keep the indices in OAM order: it is the priority */
+                int m = a->n++;
+                while (m > 0 && a->idx[m - 1] > b->idx[k]) { a->idx[m] = a->idx[m - 1]; m--; }
+                a->idx[m] = b->idx[k];
+            }
             a->pal3only &= b->pal3only;
             grp[j] = grp[--ngrp]; j--;              /* look at the group moved into slot j */
         }
@@ -454,7 +461,11 @@ static int ncache[2];
 
 static ULONG group_sig(Group *g, int with_o)
 {
-    ULONG h = (ULONG)g->n * 0x9e3779b1UL ^ (ULONG)(g->y1 - g->y0) ^ ((ULONG)with_o << 31) ^ ((ULONG)(ppu_ctrl & 0x28) << 20);
+    /* the CHR banks are part of it: the game switches the sprite bank while the OAM stays the same (in field
+       play), and a cached picture from the other bank showed for a frame (caps flashed on players' heads) */
+    ULONG h = (ULONG)g->n * 0x9e3779b1UL ^ (ULONG)(g->y1 - g->y0) ^ ((ULONG)with_o << 31) ^ ((ULONG)(ppu_ctrl & 0x28) << 20)
+            ^ ((ULONG)mmc_chr0 << 8) ^ ((ULONG)mmc_chr1 << 13) ^ ((ULONG)(mmc_ctrl & 0x10) << 14)
+            ^ (split_on ? ((ULONG)split_chr0 * 0x01000193UL) ^ ((ULONG)split_chr1 * 0x0100019dUL) ^ ((ULONG)split_line << 4) : 0);
     int k, behind = 0;
     for (k = 0; k < g->n; k++) {
         int i = g->idx[k];

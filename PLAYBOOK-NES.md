@@ -163,6 +163,14 @@ sections above if a lesson is general.
     picture, up to 7 lines above an 8-line crop: hide 8 at the top and 16 at the bottom.
     **Bitplane DMA starts at the display window's first line**: move the window down N lines and add N to the
     scroll, or the background slides down under the sprites (they looked too high).
+  - **Caps flashed on players' heads**: a metasprite part drawn as its own NES sprite (the cap) can land on a
+    different Amiga sprite than the head, and the hardware's sprite order then decides which is in front, not
+    the NES's (lowest OAM index). Merge *overlapping* groups whatever their OAM distance, keep indices in OAM
+    order, and put the CHR banks into the sprite cache key (the game switches the sprite bank with the same OAM).
+    Found by comparing `tools/vhost.c` with `host_test -d` pixel by pixel at full resolution.
+  - **"Stray" high sounds that are in the game**: check the reference NES's own APU writes (`APULOG=file
+    tools/nesref`) before changing the sound: here the 4 kHz triangle blips at throws and hits are the game's.
+    Four-step waveforms for them are brighter and louder than the NES's 32 steps: play them a little quieter.
   - **A strange beep**: Paula's fastest period is 124, so a 16-sample triangle or 8-sample pulse cannot play notes
     above ~1.8 / 3.5 kHz; clamping the period played them an octave or more low. Use shorter waveforms (8/4
     samples) for high notes instead. Test with `tools/vhost.c EVERY=2` (a slow Amiga) and look for per==124 in
