@@ -48,11 +48,19 @@ static void prof_hook(void)
     UWORD *w;
     int i;
     sys_key_poll();
+    video_vbl();
     __asm__ volatile ("move.l %%sp,%0" : "=a"(w));
     for (i = 0; i < 80; i++)
         if (w[i + 3] == 0x006c && (w[i] & 0xff00) == 0) { if (prof_n < 16384) prof_pc[prof_n++] = ((ULONG)w[i + 1] << 16) | w[i + 2]; break; }
 }
 #endif
+
+/* at every vertical blank: the keys, and the display window that crops the picture to the NES's 256 pixels */
+static void vbl_hook(void)
+{
+    sys_key_poll();
+    video_vbl();
+}
 
 static void game_start(void)
 {
@@ -108,7 +116,7 @@ int main(int argc, char **argv)
     if (!game_load() || !disp_open(&display)) { disp_close(); sys_free_all(); return 20; }
     sys_force_pal = 1;                                          /* NTSC machine: run the 256-line picture at 50 Hz */
     if (!sys_take()) { disp_close(); sys_free_all(); return 20; }
-    sys_vbl_hook = sys_key_poll;                                /* keys are read at every vertical blank */
+    sys_vbl_hook = vbl_hook;                                    /* keys and the display window, every vertical blank */
     hz = sys_is_pal ? 50 : 60;
     disp_palette(palette, 0, 48);
     disp_on();

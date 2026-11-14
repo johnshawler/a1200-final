@@ -137,7 +137,9 @@ instructions per 8×8 sprite), not memory.
   tile pattern differs (`redraw_changed` in `src/video.c`); the game switches the sprite page while scrolling.
 - While scrolling, draw every needed column each frame (frames are late below 50 Hz); new screens stream 110
   tiles a frame behind a black picture.
-- Border columns are blank; a column is drawn from the nametable when it enters the NES picture.
+- The display window crops the picture to 256 pixels (written from the vertical-blank hook after the kit's copper
+  list); border columns are not drawn at all, and a column is drawn from the nametable when it enters the picture.
+- New screens: whole columns with the per-column work done once, 420 tiles a frame, none while the NES is off.
 
 ## 7. Sound
 

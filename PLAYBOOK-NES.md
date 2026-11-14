@@ -98,8 +98,8 @@ Say the verdict in the report from the start; name the upgrade.
 ## 7. Display and sound recipes
 
 - Background: 4 planes = 16 NES colours (attribute bits as planes 2–3), hardware scroll over an unwrapped world,
-  stream tile columns, each tile row at y and y+240 drawing only the shown copy, border columns blank, honour
-  PPUMASK's hidden left column. Tile-set-only splits: draw rows with the right tile set.
+  stream tile columns, each tile row at y and y+240 drawing only the shown copy, crop to 256 pixels with the
+  display window (and 8 more on the left when PPUMASK hides that column). Tile-set-only splits: draw rows with the right tile set.
 - Sprites: cluster ≤ 64 px, 64-pixel attached pairs (15 colours), reuse channels down the screen, cache unchanged
   clusters from the previous sprite set. Behind-background priority (with its masking quirk) and 8x16 sprites are done.
 - Sound: APU model (length, envelope, sweep, linear counter, 240 Hz sequencer) → Paula periods and volumes with
@@ -151,6 +151,11 @@ sections above if a lesson is general.
   - **Overdraw at the edges**: columns in the 32-pixel side borders miss the game's nametable writes (their cells
     belong to the other side of the 512-pixel wrap) and came back stale. Keep the borders blank and draw a column
     fresh when it enters the NES picture.
+  - **Jittery edges, black frames between views** (after the fixes above): crop the picture to the NES's 256
+    pixels with the display window (DIWSTRT/DIWSTOP from the vertical-blank hook: `video_vbl`), so partly drawn
+    columns never show and border columns need no drawing at all. Draw new screens column by column with the
+    per-column work done once (`draw_column`), 420 tiles a frame, and nothing while the NES picture is off (it is
+    still writing the nametable). The NES blanks 2-5 frames for a view change; the port now adds about 2.
   - **A strange beep**: Paula's fastest period is 124, so a 16-sample triangle or 8-sample pulse cannot play notes
     above ~1.8 / 3.5 kHz; clamping the period played them an octave or more low. Use shorter waveforms (8/4
     samples) for high notes instead. Test with `tools/vhost.c EVERY=2` (a slow Amiga) and look for per==124 in

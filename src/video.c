@@ -135,7 +135,8 @@ static void draw_tile_copies(LONG uc, int r, UBYTE copies)
     LONG x = uc * 8;
     UBYTE *d;
     if (x < -64 || x >= LEVEL_W + 320) return;
-    if (colstate[uc & 63] != 2) {                   /* not a (blank) border column */
+    if (colstate[uc & 63] == 2) return;             /* a border column: the display window hides it */
+    {
         cell = nt_cell(uc, r); base = cell & 0x400;
         tile = nes_vram[cell]; tx = (UBYTE)(uc & 31);
         attr = nes_vram[base | 0x3c0 | ((r >> 2) << 3) | (tx >> 2)];
@@ -159,6 +160,30 @@ static void want_cols(LONG *lo, LONG *hi)
 }
 
 static UBYTE fresh;                     /* a new screen is being drawn: show black until it is complete */
+
+/* a whole column, rows r0..r1-1, with the per-column work done once (a new screen is ~1000 tiles) */
+static void draw_column(LONG uc, int r0, int r1)
+{
+    static const ULONG palw[4] = { 0x0000, 0x00ff, 0xff00, 0xffff };
+    UBYTE tx = (UBYTE)(uc & 31), sh = (UBYTE)(tx & 2);
+    const UBYTE *nt = nes_vram + (((uc >> 5) & 1) << 10) + tx, *at = nes_vram + (((uc >> 5) & 1) << 10) + 0x3c0 + (tx >> 2);
+    const UBYTE *pu = nes_chr_data + (ULONG)bg_page(up0, up1) * 0x1000, *pl = nes_chr_data + (ULONG)bg_page(lo0, lo1) * 0x1000;
+    LONG x = uc * 8;
+    UBYTE *d;
+    int r;
+    if (x < -64 || x >= LEVEL_W + 320 || colstate[uc & 63] == 2) return;
+    d = disp_front + (ULONG)(r0 * 8) * 64 + ((x + disp_margin) >> 3);
+    for (r = r0; r < r1; r++, d += 8 * 64) {
+        UBYTE c = rowcopies[r];
+        const UBYTE *src = (r < split_row ? pu : pl) + (ULONG)nt[r << 5] * 16;
+        ULONG w = palw[(at[(r >> 2) << 3] >> (((r & 2) << 1) | sh)) & 3];
+#ifdef LOGIC_TRACE
+        { extern ULONG vtiles; vtiles++; }
+#endif
+        if (c & 1) tile8(d, src, w);
+        if (c & 2) tile8(d + 240 * 64, src, w);
+    }
+}
 static void invalidate(void) { col_lo = 1; col_hi = 0; work_row = -1; fresh = 1; }
 
 /* make every row's copies match what the scroll position sy shows */
@@ -192,9 +217,9 @@ static void stream_cols(int n)
             work_row = 0;
             colstate[work_col & 63] = col_visible(work_col) ? 1 : 2;
         }
-        draw_tile(work_col, work_row);
-        n--;
-        if (++work_row == 30) {
+        if (work_row == 0 && n >= 30) { draw_column(work_col, 0, 30); n -= 30; work_row = 30; }
+        else { draw_tile(work_col, work_row); n--; work_row++; }
+        if (work_row == 30) {
             if (work_col > col_hi) col_hi = work_col; else col_lo = work_col;
             work_row = -1;
         }
@@ -212,7 +237,7 @@ static void fix_edges(void)
         UBYTE want = col_visible(uc) ? 1 : 2;
         if (colstate[uc & 63] != want) {
             colstate[uc & 63] = want;
-            for (r = 0; r < 30; r++) draw_tile(uc, r);
+            if (want == 1) draw_column(uc, 0, 30);   /* a column that left is hidden by the display window */
         }
     }
 }
@@ -536,6 +561,26 @@ void video_start(void)
 }
 
 
+/* The NES picture is 256 pixels wide; the 32-pixel strips beside it are hidden with the display window
+   (as a TV crops the NES), and so are the left 8 pixels when PPUMASK hides them. Columns there are partly
+   drawn at any fine scroll, so without this the picture's edges jitter by up to 7 pixels as it scrolls. The
+   kit's copper list sets the full 320-pixel window at the top of every frame; video_vbl() narrows it from the
+   vertical-blank interrupt, before the first line of the picture. */
+static UWORD diw_left = 0xa1;
+#ifdef __m68k__
+#include <hardware/custom.h>
+#define custom_hw ((volatile struct Custom *)0xdff000)
+void video_vbl(void)
+{
+    UWORD top = 0x2c + (256 - 240) / 2, stop = top + 240;
+    while (!(custom_hw->vposr & 1) && (custom_hw->vhposr >> 8) < 2) ;   /* after the copper's own window */
+    custom_hw->diwstrt = (UWORD)((top << 8) | diw_left);
+    custom_hw->diwstop = (UWORD)(((stop & 0xff) << 8) | 0xa1);
+}
+#else
+void video_vbl(void) { (void)diw_left; }        /* host harness: tools/vhost.c crops to 256 pixels itself */
+#endif
+
 void video_frame(void)
 {
     int on = (ppu_mask & 0x18) != 0, budget = 0, i;
@@ -583,7 +628,7 @@ void video_frame(void)
     VP(1, sync_rows(sy));
 
     /* nametable cells the game wrote (a whole new screen: draw it again column by column) */
-    if (nes_ndirty > 200) invalidate();
+    if (nes_ndirty > 200) invalidate();         /* a new screen (the NES draws it with its picture off) */
     else if (col_lo <= col_hi)
         VP(0, for (i = 0; i < nes_ndirty; i++) budget -= redraw_cell(nes_dirty[i]));
     for (i = 0; i < nes_ndirty; i++) nes_dirty_flag[nes_dirty[i]] = 0;
@@ -592,7 +637,7 @@ void video_frame(void)
        While scrolling, every column the view needs is drawn now: a frame drawn late (the Amiga is slower than
        50 Hz in field play) scrolls further than a fixed budget, which fell behind and blanked the picture */
     want_cols(&vlo, &vhi);
-    budget = fresh ? 110 : 64 * 30;
+    budget = !fresh ? 64 * 30 : on ? 420 : 0;  /* nothing while the NES picture is off: it is still writing */
     VP(1, stream_cols(budget));
     if (col_lo <= vlo && col_hi >= vhi) fresh = 0;
     if (!(col_lo <= vlo && col_hi >= vhi)) on = 0;
@@ -600,6 +645,7 @@ void video_frame(void)
 
     if (nes_pal_dirty || on != was_on) { set_palette(on); nes_pal_dirty = 0; was_on = (UBYTE)on; }
     disp_scroll(cam_ux - VIEW_X, sy);
+    diw_left = (ppu_mask & 2) ? 0xa1 : 0xa9;
     if ((ppu_mask & 0x10) && on) {
         /* the sprite lists only change when the sprites or their tile set do */
         static UBYTE last_oam[256], last_state[8];
