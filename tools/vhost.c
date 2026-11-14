@@ -62,7 +62,7 @@ static void shot(const char *name)
         }
     }
     for (y = 0; y < 240; y++) for (x = 0; x < 320; x++)        /* the display window: the NES's 256 pixels */
-        if (x < 32 + ((ppu_mask & 2) ? 0 : 8) || x >= 288) img[y][x] = pal[0];
+        if (x < 32 + ((ppu_mask & 2) ? 0 : 8) || x >= 288 || y < 8 || y >= 232) img[y][x] = pal[0];
     f = fopen(name, "wb"); fprintf(f, "P6\n320 240\n255\n");
     for (y = 0; y < 240; y++) for (x = 0; x < 320; x++) { fputc(img[y][x] >> 16, f); fputc((img[y][x] >> 8) & 255, f); fputc(img[y][x] & 255, f); }
     fclose(f);

@@ -9,10 +9,11 @@ Display:               planes=4 scroll=1 fetch=0 buffers=1 sprites used=7 (3 att
 Busiest moment:        fielding: camera scrolling in x and y, ~40 NES sprites, NES CPU 95-100% busy.
                        Not a Step 2 sum: the logic alone is ~85% of a frame per NES frame there (measured, debug build,
                        p90 60,695 colour clocks a tick), and 6 NES frames fall in 5 Amiga frames.
-Cut from the original: nothing visible: the picture is cropped to the NES's 256 pixels by the display window; sprite
+Cut from the original: nothing visible: the picture is cropped by the display window to the NES's 256 pixels and
+                       to 224 lines (8 at the top and bottom hidden, as a TV hides them); sprite
                        clusters that find no free hardware sprite would be dropped (none dropped in the 3000-tick host run).
                        Sound is in: the NES APU (2 pulse, triangle, noise; the game uses no DMC) modelled on Paula.
-Stock A1200 bench:     frames=2109 late=426 worst_cck=1097424 avg_cck=39168 budget_cck=71051 worst_pct=1544 avg_pct=55 display_hz=50 shown_fps=41.5
+Stock A1200 bench:     frames=2108 late=426 worst_cck=1095192 avg_cck=39054 budget_cck=71051 worst_pct=1541 avg_pct=54 display_hz=50 shown_fps=41.5
                        ticks=3000 checksum=9ff827ce  (FS-UAE 3.1.66, tools/bench.sh, AROS ROM)
 With 4 MB fast RAM:    frames=2313 late=187 worst_cck=506155 avg_cck=24633 budget_cck=71051 worst_pct=712 avg_pct=34 display_hz=50 shown_fps=46.2
                        ticks=3000 checksum=9ff827ce

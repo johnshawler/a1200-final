@@ -562,17 +562,20 @@ void video_start(void)
 
 
 /* The NES picture is 256 pixels wide; the 32-pixel strips beside it are hidden with the display window
-   (as a TV crops the NES), and so are the left 8 pixels when PPUMASK hides them. Columns there are partly
+   (as a TV crops the NES), so are 8 lines at the top and bottom, and so are the left 8 pixels when PPUMASK hides them. Columns there are partly
    drawn at any fine scroll, so without this the picture's edges jitter by up to 7 pixels as it scrolls. The
    kit's copper list sets the full 320-pixel window at the top of every frame; video_vbl() narrows it from the
    vertical-blank interrupt, before the first line of the picture. */
 static UWORD diw_left = 0xa1;
+#define OVERSCAN 8                      /* lines hidden at the top and at the bottom, as by a TV */
 #ifdef __m68k__
 #include <hardware/custom.h>
 #define custom_hw ((volatile struct Custom *)0xdff000)
 void video_vbl(void)
 {
-    UWORD top = 0x2c + (256 - 240) / 2, stop = top + 240;
+    /* 8 lines at the top and bottom are cropped too: TVs hide them, and NES games write the next rows of a
+       vertically scrolling picture there (other parts of the field showed through) */
+    UWORD top = 0x2c + (256 - 240) / 2 + OVERSCAN, stop = 0x2c + (256 - 240) / 2 + 240 - OVERSCAN;
     while (!(custom_hw->vposr & 1) && (custom_hw->vhposr >> 8) < 2) ;   /* after the copper's own window */
     custom_hw->diwstrt = (UWORD)((top << 8) | diw_left);
     custom_hw->diwstop = (UWORD)(((stop & 0xff) << 8) | 0xa1);
