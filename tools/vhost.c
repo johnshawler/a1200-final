@@ -36,8 +36,8 @@ void disp_sprite_off(UWORD n) { spr[n] = 0; }
 static void shot(const char *name)
 {
     static ULONG img[240][320]; int x, y, p, n; FILE *f;
-    for (y = 0; y < 240; y++) for (x = 0; x < 320; x++) {
-        ULONG off = (ULONG)(y + scy) * 64 + ((scx + x + 64) >> 3); int b = 7 - ((scx + x) & 7), c = 0;
+    for (y = 8; y < 240; y++) for (x = 0; x < 320; x++) {
+        ULONG off = (ULONG)(y + scy - 8) * 64 + ((scx + x + 64) >> 3);   /* bitplane DMA starts 8 lines in (the window) */ int b = 7 - ((scx + x) & 7), c = 0;
         for (p = 0; p < 4; p++) c |= ((disp_front[off + p * disp_plane] >> b) & 1) << p;
         img[y][x] = pal[c];
     }
@@ -62,7 +62,7 @@ static void shot(const char *name)
         }
     }
     for (y = 0; y < 240; y++) for (x = 0; x < 320; x++)        /* the display window: the NES's 256 pixels */
-        if (x < 32 + ((ppu_mask & 2) ? 0 : 8) || x >= 288 || y < 8 || y >= 232) img[y][x] = pal[0];
+        if (x < 32 + ((ppu_mask & 2) ? 0 : 8) || x >= 288 || y < 8 || y >= 224) img[y][x] = pal[0];
     f = fopen(name, "wb"); fprintf(f, "P6\n320 240\n255\n");
     for (y = 0; y < 240; y++) for (x = 0; x < 320; x++) { fputc(img[y][x] >> 16, f); fputc((img[y][x] >> 8) & 255, f); fputc(img[y][x] & 255, f); }
     fclose(f);

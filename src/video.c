@@ -562,20 +562,24 @@ void video_start(void)
 
 
 /* The NES picture is 256 pixels wide; the 32-pixel strips beside it are hidden with the display window
-   (as a TV crops the NES), so are 8 lines at the top and bottom, and so are the left 8 pixels when PPUMASK hides them. Columns there are partly
+   (as a TV crops the NES), so are 8 lines at the top and 16 at the bottom, and so are the left 8 pixels when PPUMASK hides them. Columns there are partly
    drawn at any fine scroll, so without this the picture's edges jitter by up to 7 pixels as it scrolls. The
    kit's copper list sets the full 320-pixel window at the top of every frame; video_vbl() narrows it from the
    vertical-blank interrupt, before the first line of the picture. */
 static UWORD diw_left = 0xa1;
-#define OVERSCAN 8                      /* lines hidden at the top and at the bottom, as by a TV */
+#define OVERSCAN     8                  /* lines hidden at the top, as by a TV */
+#define OVERSCAN_BOT 16                 /* and at the bottom: see video_vbl() */
 #ifdef __m68k__
 #include <hardware/custom.h>
 #define custom_hw ((volatile struct Custom *)0xdff000)
 void video_vbl(void)
 {
-    /* 8 lines at the top and bottom are cropped too: TVs hide them, and NES games write the next rows of a
-       vertically scrolling picture there (other parts of the field showed through) */
-    UWORD top = 0x2c + (256 - 240) / 2 + OVERSCAN, stop = 0x2c + (256 - 240) / 2 + 240 - OVERSCAN;
+    /* Lines at the top and bottom are cropped too, as a TV does. The NES nametable is 240 lines tall and wraps:
+       the row the game writes next while scrolling up is the one at the bottom of the picture, up to 7 lines
+       above the usual 8-line crop at some fine scrolls (parts of the other end of the field flashed there).
+       So 16 lines are hidden at the bottom. Bitplane DMA starts at the window's first line: the scroll passed
+       to disp_scroll() is OVERSCAN lines further down, so the picture stays in place under the sprites. */
+    UWORD top = 0x2c + (256 - 240) / 2 + OVERSCAN, stop = 0x2c + (256 - 240) / 2 + 240 - OVERSCAN_BOT;
     while (!(custom_hw->vposr & 1) && (custom_hw->vhposr >> 8) < 2) ;   /* after the copper's own window */
     custom_hw->diwstrt = (UWORD)((top << 8) | diw_left);
     custom_hw->diwstop = (UWORD)(((stop & 0xff) << 8) | 0xa1);
@@ -647,7 +651,7 @@ void video_frame(void)
     if (col_lo <= col_hi) fix_edges();
 
     if (nes_pal_dirty || on != was_on) { set_palette(on); nes_pal_dirty = 0; was_on = (UBYTE)on; }
-    disp_scroll(cam_ux - VIEW_X, sy);
+    disp_scroll(cam_ux - VIEW_X, sy + OVERSCAN);     /* bitplane DMA starts at the window: line OVERSCAN shows first */
     diw_left = (ppu_mask & 2) ? 0xa1 : 0xa9;
     if ((ppu_mask & 0x10) && on) {
         /* the sprite lists only change when the sprites or their tile set do */
