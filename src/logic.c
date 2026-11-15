@@ -104,8 +104,17 @@ void game_tick(unsigned short in)
 
 /* Bench: "Exhibition mode, watch game" (computer against computer), then a tap on A every 128 ticks to get
    through the screens between plays. It plays pitches, hits and fielding: the busiest scenes. */
+#ifdef BENCH_SCRIPT                            /* debug builds: a scripted session (tools/flow/script2c.py) */
+#include "bench_script.h"
+#endif
 unsigned short game_bench_input(unsigned int t)
 {
+#ifdef BENCH_SCRIPT
+    { unsigned short r = 0; unsigned i;
+      for (i = 0; i < sizeof bench_script / sizeof bench_script[0]; i++)
+          if (t >= bench_script[i][0] && t <= bench_script[i][1]) r |= (unsigned short)bench_script[i][2];
+      return r; }
+#endif
     /* BENCH INPUT BEGIN (per game: tools/new_port.sh resets it) */
     if (t >= 100 && t <= 105) return IN_START;
     if (t >= 200 && t <= 205) return IN_DOWN;

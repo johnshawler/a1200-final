@@ -19,7 +19,7 @@ resets the per-game files and keeps everything reusable. The Claude skill in `sk
 | Mapper | MMC1 in `nesref.c`, `nes.c`, and the fast paths in `nes68k.s` (`_set_prg`, `_io_wr`) | add the new mapper in all three |
 | Per game | `tools/games/<game>.py` (NORETURN, hand-written routines), `game_bench_input` in `src/logic.c`, the flow traces in `tools/flow/`, `tools/make_assets.sh` (ROM check), `original/README.md` | write new |
 | Starting a port | `tools/new_port.sh`, `skills/amiga-nes-port/SKILL.md` | run once / install once |
-| Debugging | `tools/debug_run.sh`, `tools/shot_at.sh`, `src/prof68k.s` (1 kHz profiler), `LOGIC_TRACE`/`LOGIC_NOSUM`/`LOGIC_DUMP`/`HOLD_AT` builds | use as is |
+| Debugging | `tools/flow/script2c.py` + `-DBENCH_SCRIPT` (any input script as the Amiga bench), `tools/debug_run.sh`, `tools/shot_at.sh`, `src/prof68k.s` (1 kHz profiler), `LOGIC_TRACE`/`LOGIC_NOSUM`/`LOGIC_DUMP`/`HOLD_AT` builds | use as is |
 
 ## 2. Start of a port: the first day
 
@@ -171,6 +171,12 @@ sections above if a lesson is general.
   - **"Stray" high sounds that are in the game**: check the reference NES's own APU writes (`APULOG=file
     tools/nesref`) before changing the sound: here the 4 kHz triangle blips at throws and hits are the game's.
     Four-step waveforms for them are brighter and louder than the NES's 32 steps: play them a little quieter.
+  - **"It is impossible to hit the batter with a pitch"**: before changing anything, prove whether the original
+    can. Here the ROM's message table has HIT BY PITCH (big-font tiles in a table at bank 4 $B20E; the result is
+    decided at $D32C). A host harness that plays random pitching input from the player's first pitching half and
+    watches the nametable for the message found it in 5 of 24 sessions (throw with A, then steer the ball into
+    the batter during its flight). The same session on the Amiga (`-DBENCH_SCRIPT`, `tools/flow/script2c.py`)
+    gave the host's checksum. Answer with the evidence and how to do it in the game.
   - **A strange beep**: Paula's fastest period is 124, so a 16-sample triangle or 8-sample pulse cannot play notes
     above ~1.8 / 3.5 kHz; clamping the period played them an octave or more low. Use shorter waveforms (8/4
     samples) for high notes instead. Test with `tools/vhost.c EVERY=2` (a slow Amiga) and look for per==124 in
